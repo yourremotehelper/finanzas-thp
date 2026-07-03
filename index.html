@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Finanzas</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-title">FINANZAS</div>
+        <div class="brand-sub">seguimiento mensual</div>
+      </div>
+      <nav>
+        <button id="nav-dashboard" class="nav-item">📊 Dashboard</button>
+        <button id="nav-config" class="nav-item">⚙️ Configuración</button>
+        <div class="nav-label">Meses</div>
+        <div id="month-list"></div>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="btn-add-month" class="btn-primary">+ Nuevo mes</button>
+      </div>
+    </aside>
+    <main id="main-content">
+      <div class="loading">Cargando…</div>
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
