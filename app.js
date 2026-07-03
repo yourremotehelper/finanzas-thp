@@ -215,6 +215,8 @@ function renderConfig() {
     const val = input.value.trim();
     if (!val) return;
     if ((config.categoriasGastos || []).includes(val)) { input.value = ""; return; }
+    addCategoria(val);
+    input.value = "";
   });
 }
 
