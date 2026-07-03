@@ -5,7 +5,8 @@ import {
   getFirestore, collection, onSnapshot, doc, addDoc, updateDoc, deleteDoc, orderBy, query,
   setDoc, getDoc, arrayUnion, arrayRemove,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import Chart from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/+esm";
+import { Chart, registerables } from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/+esm";
+Chart.register(...registerables);
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
