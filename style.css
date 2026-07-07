@@ -225,6 +225,21 @@ canvas { max-width: 100%; }
 
 .dash-table td, .dash-table th { padding: 10px 16px; }
 
+#print-area { display: none; }
+@media print {
+  #app { display: none !important; }
+  #print-area { display: block !important; padding: 24px; font-family: var(--sans); color: #1c1917; }
+  .print-title { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
+  .print-sub { font-size: 12px; color: #78716c; margin-bottom: 20px; }
+  .print-section-title { font-size: 14px; font-weight: 700; margin: 20px 0 8px; border-bottom: 1px solid #d6d3d1; padding-bottom: 4px; }
+  .print-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 4px; }
+  .print-table th, .print-table td { border: 1px solid #d6d3d1; padding: 5px 8px; text-align: left; }
+  .print-table th { background: #f5f5f4; font-weight: 600; }
+  .print-resumen { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; font-size: 13px; margin-bottom: 4px; }
+  .print-resumen div { display: flex; justify-content: space-between; border-bottom: 1px dotted #d6d3d1; padding: 3px 0; }
+  .print-resumen .hl { font-weight: 700; }
+}
+
 .tag-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .tag {
   display: flex;
