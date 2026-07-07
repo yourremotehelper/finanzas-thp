@@ -92,13 +92,18 @@ function computeTotals(m) {
   const ingPendientes = (m.ingresos || []).filter((i) => i.cobrado === "No").reduce((s, i) => s + (Number(i.importe) || 0), 0);
   const gasPagados = (m.gastos || []).filter((g) => g.estado === "Pagado").reduce((s, g) => s + (Number(g.importe) || 0), 0);
   const gasPendientes = (m.gastos || []).filter((g) => g.estado === "Pendiente").reduce((s, g) => s + (Number(g.importe) || 0), 0);
-  const saldoDisponible = (Number(m.saldoInicial) || 0) + ingCobrados - gasPagados;
-  const saldoTotal = saldoDisponible + (Number(m.reserva) || 0);
-  const totalRecursos = (Number(m.saldoInicial) || 0) + ingCobrados + (Number(m.reserva) || 0);
   const totalGastos = gasPagados + gasPendientes;
-  const beneficioNeto = totalRecursos - totalGastos;
-  const totalFacturado = (m.facturas || []).reduce((s, f) => s + (Number(f.importe) || 0), 0);
-  return { ingCobrados, ingPendientes, gasPagados, gasPendientes, saldoDisponible, saldoTotal, totalRecursos, totalGastos, beneficioNeto, totalFacturado };
+  const facturacionTotal = ingCobrados + ingPendientes;
+  // Beneficio neto: real — solo lo que ya se ha cobrado menos lo que ya se ha pagado este periodo.
+  const beneficioNeto = ingCobrados - gasPagados;
+  // Flujo de caja: saldo acumulado — lo que traías de antes + el beneficio neto real de este mes.
+  const flujoCaja = (Number(m.saldoInicial) || 0) + beneficioNeto;
+  const cajaNoDisponible = Number(m.reserva) || 0;
+  const totalFacturasRecibidas = (m.facturas || []).reduce((s, f) => s + (Number(f.importe) || 0), 0);
+  return {
+    ingCobrados, ingPendientes, gasPagados, gasPendientes, totalGastos,
+    facturacionTotal, beneficioNeto, flujoCaja, cajaNoDisponible, totalFacturasRecibidas,
+  };
 }
 
 // ---------- Firestore ----------
@@ -222,7 +227,7 @@ function renderInformes() {
   const m = months.find((x) => x.id === informesMonthId);
   const t = computeTotals(m);
   const objetivo = Number(config.margenObjetivo ?? 30);
-  const margenActual = t.totalRecursos > 0 ? (t.beneficioNeto / t.totalRecursos) * 100 : 0;
+  const margenActual = t.ingCobrados > 0 ? (t.beneficioNeto / t.ingCobrados) * 100 : 0;
   const cumple = margenActual >= objetivo;
 
   const porCategoria = {};
@@ -481,14 +486,20 @@ function renderMonth(m) {
       <h3 class="section-title" style="margin-bottom:12px;">Resumen del mes</h3>
       <div class="resumen-grid">
         <div class="resumen-item"><div class="lbl">Saldo inicial</div><input type="number" step="0.01" id="f-saldoInicial" value="${m.saldoInicial || 0}"></div>
-        <div class="resumen-item"><div class="lbl">Reserva / no disponible</div><input type="number" step="0.01" id="f-reserva" value="${m.reserva || 0}"></div>
-        <div class="resumen-item"><div class="lbl">Saldo disponible</div><div class="val">${eur(t.saldoDisponible)}</div></div>
-        <div class="resumen-item"><div class="lbl">Saldo total (con reserva)</div><div class="val">${eur(t.saldoTotal)}</div></div>
-        <div class="resumen-item"><div class="lbl">Total recursos del periodo</div><div class="val">${eur(t.totalRecursos)}</div></div>
+        <div class="resumen-item"><div class="lbl">Caja no disponible (reserva)</div><input type="number" step="0.01" id="f-reserva" value="${m.reserva || 0}"></div>
+        <div class="resumen-item"><div class="lbl">Ingresos efectuados</div><div class="val tone-good">${eur(t.ingCobrados)}</div></div>
+        <div class="resumen-item"><div class="lbl">Ingresos pendientes</div><div class="val tone-warn">${eur(t.ingPendientes)}</div></div>
+        <div class="resumen-item"><div class="lbl">Facturación total</div><div class="val">${eur(t.facturacionTotal)}</div></div>
+        <div class="resumen-item"><div class="lbl">Gastos realizados</div><div class="val tone-bad">${eur(t.gasPagados)}</div></div>
+        <div class="resumen-item"><div class="lbl">Gastos pendientes</div><div class="val tone-warn">${eur(t.gasPendientes)}</div></div>
         <div class="resumen-item"><div class="lbl">Total gastos</div><div class="val">${eur(t.totalGastos)}</div></div>
-        <div class="resumen-item"><div class="lbl">Total facturado</div><div class="val">${eur(t.totalFacturado)}</div></div>
-        <div class="resumen-item"><div class="lbl">Ingresos pendientes de cobro</div><div class="val tone-warn">${eur(t.ingPendientes)}</div></div>
+        <div class="resumen-item"><div class="lbl">Beneficio neto</div><div class="val ${t.beneficioNeto >= 0 ? "tone-good" : "tone-bad"}"><strong>${eur(t.beneficioNeto)}</strong></div></div>
+        <div class="resumen-item"><div class="lbl">Flujo de caja (disponible ahora)</div><div class="val"><strong>${eur(t.flujoCaja)}</strong></div></div>
       </div>
+      <p class="config-hint" style="margin-top:12px;">
+        <strong>Beneficio neto</strong> = Ingresos efectuados − Gastos realizados (solo lo que ya ha entrado y salido de verdad este mes; no cuenta lo pendiente).
+        <strong>Flujo de caja</strong> = Saldo inicial + Beneficio neto (el saldo acumulado que traías, más lo que este mes ha generado de verdad).
+      </p>
     </div>
 
     <div class="card">
@@ -511,11 +522,13 @@ function renderMonth(m) {
 
     <div class="card">
       <div class="section-header">
-        <div><span class="section-title">Facturas emitidas</span><span class="section-count">${(m.facturas || []).length}</span></div>
+        <div><span class="section-title">Facturas recibidas</span><span class="section-count">${(m.facturas || []).length}</span></div>
         <button class="btn-add" data-add="facturas">+ Añadir</button>
       </div>
+      <p class="config-hint" style="padding:8px 16px 0;">Registro de facturas que recibes, para cruzarlas manualmente con la tabla de Gastos. No entra en el Resumen del mes.</p>
       <table><thead><tr><th>Factura</th><th>Emisor</th><th>Concepto</th><th>Importe</th><th>Notas</th><th></th></tr></thead>
       <tbody>${facturasRows}</tbody></table>
+      <div class="config-hint" style="padding:10px 16px;border-top:1px solid var(--stone-200);">Total facturas recibidas: <strong>${eur(t.totalFacturasRecibidas)}</strong></div>
     </div>
   `;
 
@@ -590,7 +603,7 @@ document.getElementById("btn-add-month").addEventListener("click", async () => {
   const nombre = prompt("Nombre del nuevo mes (ej. Agosto 2026):");
   if (!nombre) return;
   const last = months[months.length - 1];
-  const saldoInicial = last ? computeTotals(last).saldoTotal : 0;
+  const saldoInicial = last ? (computeTotals(last).flujoCaja + computeTotals(last).cajaNoDisponible) : 0;
   await addMonth(nombre, saldoInicial);
 });
 
