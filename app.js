@@ -487,6 +487,7 @@ function renderMonth(m) {
         <div class="resumen-item"><div class="lbl">Total recursos del periodo</div><div class="val">${eur(t.totalRecursos)}</div></div>
         <div class="resumen-item"><div class="lbl">Total gastos</div><div class="val">${eur(t.totalGastos)}</div></div>
         <div class="resumen-item"><div class="lbl">Total facturado</div><div class="val">${eur(t.totalFacturado)}</div></div>
+        <div class="resumen-item"><div class="lbl">Ingresos pendientes de cobro</div><div class="val tone-warn">${eur(t.ingPendientes)}</div></div>
       </div>
     </div>
 
