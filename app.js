@@ -152,6 +152,9 @@ function renderSidebar() {
   document.getElementById("nav-informes").classList.toggle("active", currentView === "informes");
   document.getElementById("nav-beneficiarios").classList.toggle("active", currentView === "beneficiarios");
   document.getElementById("nav-config").classList.toggle("active", currentView === "config");
+
+  const targetMonth = months.find((x) => x.id === currentView) || months.find((x) => x.id === informesMonthId) || months[months.length - 1];
+  document.getElementById("pdf-target-label").textContent = targetMonth ? `se exportará: ${targetMonth.nombre}` : "";
 }
 
 function statCard(label, value, tone) {
@@ -424,6 +427,56 @@ function renderConfig() {
   });
 }
 
+function printMonth(m, t) {
+  const fecha = new Date().toLocaleDateString("es-ES", { day: "numeric", month: "long", year: "numeric" });
+
+  const resumenRows = [
+    ["Saldo inicial", eur(m.saldoInicial || 0)],
+    ["Caja no disponible (reserva)", eur(m.reserva || 0)],
+    ["Ingresos efectuados", eur(t.ingCobrados)],
+    ["Ingresos pendientes", eur(t.ingPendientes)],
+    ["Facturación total", eur(t.facturacionTotal)],
+    ["Gastos realizados", eur(t.gasPagados)],
+    ["Gastos pendientes", eur(t.gasPendientes)],
+    ["Total gastos", eur(t.totalGastos)],
+    ["Beneficio neto", eur(t.beneficioNeto), true],
+    ["Flujo de caja", eur(t.flujoCaja), true],
+  ];
+
+  const ingresosBody = (m.ingresos || []).map((r) =>
+    `<tr><td>${r.cliente || ""}</td><td>${r.concepto || ""}</td><td>${eur(r.importe)}</td><td>${r.cobrado || ""}</td></tr>`
+  ).join("") || `<tr><td colspan="4">Sin datos</td></tr>`;
+
+  const gastosBody = (m.gastos || []).map((r) =>
+    `<tr><td>${r.concepto || ""}</td><td>${r.categoria || ""}</td><td>${eur(r.importe)}</td><td>${r.estado || ""}</td></tr>`
+  ).join("") || `<tr><td colspan="4">Sin datos</td></tr>`;
+
+  const facturasBody = (m.facturas || []).map((r) =>
+    `<tr><td>${r.factura || ""}</td><td>${r.emisor || ""}</td><td>${r.concepto || ""}</td><td>${eur(r.importe)}</td></tr>`
+  ).join("") || `<tr><td colspan="4">Sin datos</td></tr>`;
+
+  document.getElementById("print-area").innerHTML = `
+    <div class="print-title">Finanzas — ${m.nombre}</div>
+    <div class="print-sub">Informe generado el ${fecha}</div>
+
+    <div class="print-section-title">Resumen del mes</div>
+    <div class="print-resumen">
+      ${resumenRows.map(([lbl, val, hl]) => `<div class="${hl ? "hl" : ""}"><span>${lbl}</span><span>${val}</span></div>`).join("")}
+    </div>
+
+    <div class="print-section-title">Ingresos (${(m.ingresos || []).length})</div>
+    <table class="print-table"><thead><tr><th>Cliente</th><th>Concepto</th><th>Importe</th><th>Cobrado</th></tr></thead><tbody>${ingresosBody}</tbody></table>
+
+    <div class="print-section-title">Gastos (${(m.gastos || []).length})</div>
+    <table class="print-table"><thead><tr><th>Concepto</th><th>Categoría</th><th>Importe</th><th>Estado</th></tr></thead><tbody>${gastosBody}</tbody></table>
+
+    <div class="print-section-title">Facturas recibidas (${(m.facturas || []).length}) — total: ${eur(t.totalFacturasRecibidas)}</div>
+    <table class="print-table"><thead><tr><th>Factura</th><th>Emisor</th><th>Concepto</th><th>Importe</th></tr></thead><tbody>${facturasBody}</tbody></table>
+  `;
+
+  window.print();
+}
+
 function renderMonth(m) {
 
   const t = computeTotals(m);
@@ -598,6 +651,12 @@ document.getElementById("nav-dashboard").addEventListener("click", () => { curre
 document.getElementById("nav-informes").addEventListener("click", () => { currentView = "informes"; render(); });
 document.getElementById("nav-beneficiarios").addEventListener("click", () => { currentView = "beneficiarios"; render(); });
 document.getElementById("nav-config").addEventListener("click", () => { currentView = "config"; render(); });
+
+document.getElementById("btn-pdf").addEventListener("click", () => {
+  if (!months.length) { alert("Todavía no hay ningún mes con datos."); return; }
+  const m = months.find((x) => x.id === currentView) || months.find((x) => x.id === informesMonthId) || months[months.length - 1];
+  printMonth(m, computeTotals(m));
+});
 
 document.getElementById("btn-add-month").addEventListener("click", async () => {
   const nombre = prompt("Nombre del nuevo mes (ej. Agosto 2026):");
