@@ -261,3 +261,18 @@ canvas { max-width: 100%; }
   font-size: 13px;
 }
 .config-hint { font-size: 12px; color: var(--stone-400); margin-top: 10px; }
+
+.config-section { margin-bottom: 4px; }
+.config-section-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+
+.target-input-row { display: flex; align-items: center; gap: 8px; }
+.target-input-row input { width: 90px; border: 1px solid var(--stone-200); border-radius: 6px; padding: 6px 8px; font-family: var(--mono); font-size: 14px; }
+
+.margin-card { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.margin-gauge { flex: 1; min-width: 160px; }
+.margin-bar-track { background: var(--stone-100); border-radius: 999px; height: 10px; overflow: hidden; }
+.margin-bar-fill { height: 100%; border-radius: 999px; transition: width 0.3s; }
+.margin-value { font-family: var(--mono); font-size: 26px; font-weight: 700; }
+.margin-sub { font-size: 12px; color: var(--stone-400); margin-top: 2px; }
+
+.chart-wrap { max-width: 320px; margin: 0 auto; }
