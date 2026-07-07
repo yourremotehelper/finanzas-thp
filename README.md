@@ -26,6 +26,9 @@ service cloud.firestore {
     match /config/{docId} {
       allow read, write: if request.auth != null;
     }
+    match /beneficiarios/{docId} {
+      allow read, write: if request.auth != null;
+    }
   }
 }
 ```
@@ -53,7 +56,9 @@ git push -u origin main
 
 ## Cómo funciona
 
-- **⚙️ Configuración**: gestiona las categorías que aparecen en el desplegable "Categoría" de la tabla de Gastos (añadir/eliminar). Se guardan en Firestore y se comparten entre todos los meses.
+- **⚙️ Configuración**: gestiona el margen objetivo, las categorías de gastos, y las partidas fijas de ingresos/gastos (se precargan automáticamente al crear un mes nuevo).
+- **💳 Fichas de pago**: directorio de personas/entidades con IBAN, NIF, email, teléfono y notas — para tener a mano los datos de pago, sin vincularse todavía a los gastos.
+- **📈 Informes**: por mes, muestra el margen de beneficio real frente al objetivo que definas, y un gráfico circular de gastos por categoría.
 - **Dashboard**: resumen de todos los meses, con gráfico de barras (ingresos vs gastos) y de líneas (evolución del beneficio neto).
 - **Cada mes** (pestaña en la barra lateral): resumen con saldo inicial/reserva editables, y tres tablas — Ingresos, Gastos (con estado Pagado/Pendiente) y Facturas emitidas — donde puedes añadir, editar o borrar filas directamente.
 - **+ Nuevo mes**: crea una pestaña nueva heredando el saldo total del mes anterior como saldo inicial.
