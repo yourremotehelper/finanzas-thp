@@ -100,9 +100,12 @@ function computeTotals(m) {
   const flujoCaja = (Number(m.saldoInicial) || 0) + beneficioNeto;
   const cajaNoDisponible = Number(m.reserva) || 0;
   const totalFacturasRecibidas = (m.facturas || []).reduce((s, f) => s + (Number(f.importe) || 0), 0);
+  const saldoRealCuenta = (m.saldoRealCuenta !== null && m.saldoRealCuenta !== undefined && m.saldoRealCuenta !== "") ? Number(m.saldoRealCuenta) : null;
+  const diferenciaConciliacion = saldoRealCuenta !== null ? saldoRealCuenta - flujoCaja : null;
   return {
     ingCobrados, ingPendientes, gasPagados, gasPendientes, totalGastos,
     facturacionTotal, beneficioNeto, flujoCaja, cajaNoDisponible, totalFacturasRecibidas,
+    saldoRealCuenta, diferenciaConciliacion,
   };
 }
 
@@ -110,7 +113,7 @@ function computeTotals(m) {
 async function addMonth(nombre, saldoInicial) {
   const ingresos = (config.partidasFijasIngresos || []).map((p) => ({ ...p, cobrado: "No" }));
   const gastos = (config.partidasFijasGastos || []).map((p) => ({ ...p, estado: "Pendiente" }));
-  await addDoc(mesesRef, { nombre, orden: Date.now(), saldoInicial, reserva: 0, ingresos, gastos, facturas: [] });
+  await addDoc(mesesRef, { nombre, orden: Date.now(), saldoInicial, reserva: 0, saldoRealCuenta: null, saldoRealFecha: "", ingresos, gastos, facturas: [] });
 }
 async function saveMonthField(id, field, value) {
   await updateDoc(doc(db, "meses", id), { [field]: value });
@@ -441,6 +444,10 @@ function printMonth(m, t) {
     ["Total gastos", eur(t.totalGastos)],
     ["Beneficio neto", eur(t.beneficioNeto), true],
     ["Flujo de caja", eur(t.flujoCaja), true],
+    ...(t.saldoRealCuenta !== null ? [
+      [`Saldo real en cuenta${m.saldoRealFecha ? ` (${m.saldoRealFecha})` : ""}`, eur(t.saldoRealCuenta)],
+      ["Diferencia con lo calculado", eur(t.diferenciaConciliacion), true],
+    ] : []),
   ];
 
   const ingresosBody = (m.ingresos || []).map((r) =>
@@ -555,6 +562,20 @@ function renderMonth(m) {
       </p>
     </div>
 
+    <div class="card card-pad">
+      <h3 class="section-title" style="margin-bottom:4px;">Conciliación bancaria</h3>
+      <p class="config-hint" style="margin-top:0;margin-bottom:12px;">
+        Cuando quieras comprobar la cuenta real, pon aquí el saldo que ves en el banco. No sustituye al Flujo de caja calculado — solo lo compara, para detectar diferencias (dinero retenido, movimientos aún no reflejados, etc.) sin descuadrar las fórmulas.
+      </p>
+      <div class="resumen-grid">
+        <div class="resumen-item"><div class="lbl">Saldo real en cuenta</div><input type="number" step="0.01" id="f-saldoReal" value="${m.saldoRealCuenta ?? ""}" placeholder="Sin comprobar"></div>
+        <div class="resumen-item"><div class="lbl">Fecha de comprobación</div><input type="date" id="f-saldoRealFecha" value="${m.saldoRealFecha || ""}"></div>
+        <div class="resumen-item"><div class="lbl">Flujo de caja calculado</div><div class="val">${eur(t.flujoCaja)}</div></div>
+        <div class="resumen-item"><div class="lbl">Diferencia</div><div class="val ${t.diferenciaConciliacion === null ? "" : Math.abs(t.diferenciaConciliacion) < 1 ? "tone-good" : "tone-bad"}"><strong>${t.diferenciaConciliacion === null ? "—" : eur(t.diferenciaConciliacion)}</strong></div></div>
+      </div>
+      ${t.diferenciaConciliacion !== null && Math.abs(t.diferenciaConciliacion) >= 1 ? `<p class="config-hint" style="margin-top:10px;">${t.diferenciaConciliacion > 0 ? "Hay más dinero en el banco del que el cálculo espera — revisa si falta marcar algún ingreso como cobrado, o si el banco ya liberó algo que aquí sigue como pendiente." : "Hay menos dinero en el banco del que el cálculo espera — revisa si hay algo retenido (como Hotmart), un gasto pagado que falte marcar, o un ingreso que diste por cobrado y aún no ha llegado."}</p>` : ""}
+    </div>
+
     <div class="card">
       <div class="section-header">
         <div><span class="section-title">Ingresos</span><span class="section-count">${(m.ingresos || []).length}</span></div>
@@ -587,6 +608,8 @@ function renderMonth(m) {
 
   document.getElementById("f-saldoInicial").addEventListener("change", (e) => saveMonthField(m.id, "saldoInicial", Number(e.target.value) || 0));
   document.getElementById("f-reserva").addEventListener("change", (e) => saveMonthField(m.id, "reserva", Number(e.target.value) || 0));
+  document.getElementById("f-saldoReal").addEventListener("change", (e) => saveMonthField(m.id, "saldoRealCuenta", e.target.value === "" ? null : Number(e.target.value)));
+  document.getElementById("f-saldoRealFecha").addEventListener("change", (e) => saveMonthField(m.id, "saldoRealFecha", e.target.value));
 
   const delMonthBtn = document.getElementById("btn-del-month");
   if (delMonthBtn) delMonthBtn.addEventListener("click", async () => {
