@@ -581,8 +581,11 @@ function renderMonth(m) {
         <div><span class="section-title">Ingresos</span><span class="section-count">${(m.ingresos || []).length}</span></div>
         <button class="btn-add" data-add="ingresos">+ Añadir</button>
       </div>
-      <table><thead><tr><th>Cliente</th><th>Concepto</th><th>Importe</th><th>Cobrado</th><th></th></tr></thead>
-      <tbody>${ingresosRows}</tbody></table>
+      <div class="table-scroll">
+        <table><thead><tr><th>Cliente</th><th>Concepto</th><th>Importe</th><th>Cobrado</th><th></th></tr></thead>
+        <tbody>${ingresosRows}</tbody></table>
+      </div>
+      <div class="section-footer"><button class="btn-add" data-add="ingresos">+ Añadir</button></div>
     </div>
 
     <div class="card">
@@ -590,8 +593,11 @@ function renderMonth(m) {
         <div><span class="section-title">Gastos</span><span class="section-count">${(m.gastos || []).length}</span></div>
         <button class="btn-add" data-add="gastos">+ Añadir</button>
       </div>
-      <table><thead><tr><th>Concepto</th><th>Categoría</th><th>Importe</th><th>Estado</th><th></th></tr></thead>
-      <tbody>${gastosRows}</tbody></table>
+      <div class="table-scroll">
+        <table><thead><tr><th>Concepto</th><th>Categoría</th><th>Importe</th><th>Estado</th><th></th></tr></thead>
+        <tbody>${gastosRows}</tbody></table>
+      </div>
+      <div class="section-footer"><button class="btn-add" data-add="gastos">+ Añadir</button></div>
     </div>
 
     <div class="card">
@@ -600,9 +606,14 @@ function renderMonth(m) {
         <button class="btn-add" data-add="facturas">+ Añadir</button>
       </div>
       <p class="config-hint" style="padding:8px 16px 0;">Registro de facturas que recibes, para cruzarlas manualmente con la tabla de Gastos. No entra en el Resumen del mes.</p>
-      <table><thead><tr><th>Factura</th><th>Emisor</th><th>Concepto</th><th>Importe</th><th>Notas</th><th></th></tr></thead>
-      <tbody>${facturasRows}</tbody></table>
-      <div class="config-hint" style="padding:10px 16px;border-top:1px solid var(--stone-200);">Total facturas recibidas: <strong>${eur(t.totalFacturasRecibidas)}</strong></div>
+      <div class="table-scroll">
+        <table><thead><tr><th>Factura</th><th>Emisor</th><th>Concepto</th><th>Importe</th><th>Notas</th><th></th></tr></thead>
+        <tbody>${facturasRows}</tbody></table>
+      </div>
+      <div class="section-footer" style="justify-content:space-between;">
+        <button class="btn-add" data-add="facturas">+ Añadir</button>
+        <span class="config-hint" style="margin:0;">Total facturas recibidas: <strong>${eur(t.totalFacturasRecibidas)}</strong></span>
+      </div>
     </div>
   `;
 
