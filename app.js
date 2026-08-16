@@ -1,6 +1,14 @@
 import { firebaseConfig } from "./firebase-config.js";
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import {
+  initializeApp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+
+import {
+  getAuth,
+  signInAnonymously,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
 import {
   getFirestore,
   collection,
@@ -16,7 +24,11 @@ import {
   arrayUnion,
   arrayRemove,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { Chart, registerables } from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/+esm";
+
+import {
+  Chart,
+  registerables
+} from "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/+esm";
 
 Chart.register(...registerables);
 
@@ -33,7 +45,7 @@ const DEFAULT_CATEGORIAS = [
   "Tasaciones",
   "Software / Herramientas",
   "Marketing",
-  "Otros",
+  "Otros"
 ];
 
 const DEFAULT_CONFIG = {
@@ -41,6 +53,17 @@ const DEFAULT_CONFIG = {
   margenObjetivo: 30,
   partidasFijasIngresos: [],
   partidasFijasGastos: [],
+  cuentas: {
+    empresa1: "Cuenta Empresa 1",
+    empresa2: "Cuenta Empresa 2"
+  }
+};
+
+const ACCOUNT_IDS = ["empresa1", "empresa2"];
+
+const ACCOUNT_NAMES = {
+  empresa1: "Cuenta Empresa 1",
+  empresa2: "Cuenta Empresa 2"
 };
 
 let months = [];
@@ -49,6 +72,7 @@ let config = { ...DEFAULT_CONFIG };
 
 let currentView = "dashboard";
 let informesMonthId = null;
+let cuentasMonthId = null;
 let ready = false;
 
 const PIE_COLORS = [
@@ -61,13 +85,13 @@ const PIE_COLORS = [
   "#65a30d",
   "#0891b2",
   "#ea580c",
-  "#4338ca",
+  "#4338ca"
 ];
 
 const eur = (n) =>
   (Number(n) || 0).toLocaleString("es-ES", {
     style: "currency",
-    currency: "EUR",
+    currency: "EUR"
   });
 
 const estadoClass = (v) =>
@@ -77,101 +101,82 @@ const estadoClass = (v) =>
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 /* =========================================================
-   CUENTAS
+   ESTRUCTURA DE CUENTAS
    ========================================================= */
 
-const CUENTA_1 = "empresa1";
-const CUENTA_2 = "empresa2";
-
-const cuentaLabel = (cuenta) => {
-  return cuenta === CUENTA_2 ? "Empresa 2" : "Empresa 1";
-};
-
-const normalizeCuenta = (cuenta) => {
-  return cuenta === CUENTA_2 ? CUENTA_2 : CUENTA_1;
-};
-
-/*
- * Los movimientos antiguos que no tengan campo "cuenta"
- * se consideran automáticamente de Empresa 1.
- */
-function normalizeIngreso(i) {
+function defaultAccounts() {
   return {
-    cliente: "",
-    concepto: "",
-    importe: 0,
-    cobrado: "No",
-    cuenta: CUENTA_1,
-    ...i,
-    cuenta: normalizeCuenta(i?.cuenta),
-  };
-}
-
-function normalizeGasto(g) {
-  return {
-    concepto: "",
-    categoria: "",
-    importe: 0,
-    estado: "Pendiente",
-    cuenta: CUENTA_1,
-    ...g,
-    cuenta: normalizeCuenta(g?.cuenta),
-  };
-}
-
-function normalizeRetirada(r) {
-  return {
-    concepto: "",
-    importe: 0,
-    fecha: "",
-    notas: "",
-    ...r,
-  };
-}
-
-function normalizeAportacion(a) {
-  return {
-    concepto: "",
-    importe: 0,
-    fecha: "",
-    notas: "",
-    ...a,
+    empresa1: {
+      saldoInicial: 0,
+      saldoReal: null,
+      saldoRealFecha: ""
+    },
+    empresa2: {
+      saldoInicial: 0,
+      saldoReal: null,
+      saldoRealFecha: ""
+    }
   };
 }
 
 function normalizeMonth(m) {
+  const accounts = {
+    ...defaultAccounts(),
+    ...(m.accounts || {})
+  };
+
+  for (const id of ACCOUNT_IDS) {
+    accounts[id] = {
+      saldoInicial: Number(accounts[id]?.saldoInicial) || 0,
+      saldoReal:
+        accounts[id]?.saldoReal === null ||
+        accounts[id]?.saldoReal === undefined ||
+        accounts[id]?.saldoReal === ""
+          ? null
+          : Number(accounts[id].saldoReal),
+      saldoRealFecha: accounts[id]?.saldoRealFecha || ""
+    };
+  }
+
+  const ingresos = (m.ingresos || []).map((i) => ({
+    ...i,
+    cuenta: i.cuenta || "empresa1"
+  }));
+
+  const gastos = (m.gastos || []).map((g) => ({
+    ...g,
+    cuenta: g.cuenta || "empresa1"
+  }));
+
+  const movimientosCuenta = (m.movimientosCuenta || []).map((x) => ({
+    fecha: x.fecha || "",
+    cuenta: x.cuenta || "empresa1",
+    tipo: x.tipo || "Otro movimiento",
+    concepto: x.concepto || "",
+    importe: Number(x.importe) || 0
+  }));
+
   return {
     ...m,
-    saldoInicial: Number(m.saldoInicial) || 0,
-    saldoInicialCuenta2: Number(m.saldoInicialCuenta2) || 0,
-
-    saldoRealCuenta:
-      m.saldoRealCuenta !== undefined &&
-      m.saldoRealCuenta !== null &&
-      m.saldoRealCuenta !== ""
-        ? Number(m.saldoRealCuenta)
-        : null,
-
-    saldoRealCuenta2:
-      m.saldoRealCuenta2 !== undefined &&
-      m.saldoRealCuenta2 !== null &&
-      m.saldoRealCuenta2 !== ""
-        ? Number(m.saldoRealCuenta2)
-        : null,
-
-    ingresos: (m.ingresos || []).map(normalizeIngreso),
-    gastos: (m.gastos || []).map(normalizeGasto),
-
-    retiradasCEO: (m.retiradasCEO || []).map(normalizeRetirada),
-    aportacionesCEO: (m.aportacionesCEO || []).map(normalizeAportacion),
-
-    facturas: m.facturas || [],
+    accounts,
+    ingresos,
+    gastos,
+    movimientosCuenta
   };
 }
 
 /* =========================================================
-   SEED
+   MES SEMILLA
    ========================================================= */
 
 function seedMonth() {
@@ -179,11 +184,18 @@ function seedMonth() {
     nombre: "Julio 2026",
     orden: Date.now(),
 
-    // Empresa 1
-    saldoInicial: 2982,
-
-    // Empresa 2
-    saldoInicialCuenta2: 0,
+    accounts: {
+      empresa1: {
+        saldoInicial: 2982,
+        saldoReal: null,
+        saldoRealFecha: ""
+      },
+      empresa2: {
+        saldoInicial: 0,
+        saldoReal: null,
+        saldoRealFecha: ""
+      }
+    },
 
     reserva: 950,
 
@@ -193,256 +205,57 @@ function seedMonth() {
         concepto: "",
         importe: 580,
         cobrado: "Sí",
-        cuenta: CUENTA_1,
+        cuenta: "empresa1"
       },
       {
         cliente: "Yofre",
         concepto: "",
         importe: 2500,
         cobrado: "Sí",
-        cuenta: CUENTA_1,
-      },
+        cuenta: "empresa1"
+      }
     ],
 
     gastos: [
-      {
-        concepto: "Jaime",
-        categoria: "",
-        importe: 400,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Inmovilla",
-        categoria: "",
-        importe: 139,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasaciones",
-        categoria: "",
-        importe: 720,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasacion Alejandro Jordanis",
-        categoria: "",
-        importe: 100,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasaciones Roger marcos y elena",
-        categoria: "",
-        importe: 200,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasacion Jonathan Jaime",
-        categoria: "",
-        importe: 100,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Paula pendientes",
-        categoria: "",
-        importe: 161.1,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Olga",
-        categoria: "",
-        importe: 150,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Fresha",
-        categoria: "",
-        importe: 50,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Junior",
-        categoria: "",
-        importe: 150,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Bruno",
-        categoria: "",
-        importe: 330,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Albert",
-        categoria: "",
-        importe: 700,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasación Yofre (Marie)",
-        categoria: "",
-        importe: 100,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Tasación Nelson (Marie)",
-        categoria: "",
-        importe: 100,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Cuota Yofre (Marie)",
-        categoria: "",
-        importe: 750,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Lovable",
-        categoria: "",
-        importe: 25,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Esp y santiago",
-        categoria: "",
-        importe: 170,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Zeber",
-        categoria: "",
-        importe: 67,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "BItrix",
-        categoria: "",
-        importe: 175,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Pago Jaime dos tasaciones yop",
-        categoria: "",
-        importe: 408,
-        estado: "Pendiente",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "workspace",
-        categoria: "",
-        importe: 32,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
-      {
-        concepto: "Ads",
-        categoria: "",
-        importe: 153,
-        estado: "Pagado",
-        cuenta: CUENTA_1,
-      },
+      { concepto: "Jaime", categoria: "", importe: 400, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Inmovilla", categoria: "", importe: 139, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Tasaciones", categoria: "", importe: 720, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Tasacion Alejandro Jordanis", categoria: "", importe: 100, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Tasaciones Roger marcos y elena", categoria: "", importe: 200, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Tasacion Jonathan Jaime", categoria: "", importe: 100, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Paula pendientes", categoria: "", importe: 161.1, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Olga", categoria: "", importe: 150, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Fresha", categoria: "", importe: 50, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Junior", categoria: "", importe: 150, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Bruno", categoria: "", importe: 330, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Albert", categoria: "", importe: 700, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Tasación Yofre (Marie)", categoria: "", importe: 100, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Tasación Nelson (Marie)", categoria: "", importe: 100, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Cuota Yofre (Marie)", categoria: "", importe: 750, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Lovable", categoria: "", importe: 25, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Esp y santiago", categoria: "", importe: 170, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "Zeber", categoria: "", importe: 67, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "BItrix", categoria: "", importe: 175, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Pago Jaime dos tasaciones yop", categoria: "", importe: 408, estado: "Pendiente", cuenta: "empresa1" },
+      { concepto: "workspace", categoria: "", importe: 32, estado: "Pagado", cuenta: "empresa1" },
+      { concepto: "Ads", categoria: "", importe: 153, estado: "Pagado", cuenta: "empresa1" }
     ],
-
-    retiradasCEO: [],
-    aportacionesCEO: [],
 
     facturas: [
-      {
-        factura: "Factura_008_THP_2026-06-05.pdf",
-        emisor: "Paula Bodega",
-        concepto: "Gestión puntual visitas",
-        importe: 21.66,
-        notas: "",
-      },
-      {
-        factura: "a81c6f5d.pdf",
-        emisor: "Olga Postigo",
-        concepto: "consultas 12/6",
-        importe: 79.5,
-        notas: "",
-      },
-      {
-        factura: "93aeb144.pdf",
-        emisor: "Susana Rubio",
-        concepto: "consultas 12/6",
-        importe: 79.5,
-        notas: "",
-      },
-      {
-        factura: "b620637c.pdf",
-        emisor: "Roger Oriola",
-        concepto: "Servicios de intermediación comercial",
-        importe: 99.99,
-        notas: "",
-      },
-      {
-        factura: "87bc23d8.pdf",
-        emisor: "Roger Oriola",
-        concepto: "Servicios de intermediación comercial",
-        importe: 99.99,
-        notas: "",
-      },
-      {
-        factura: "9cef5b59.pdf",
-        emisor: "Roger Oriola",
-        concepto: "Yofre Daniel Galindo Rodríguez",
-        importe: 100,
-        notas: "",
-      },
-      {
-        factura: "744b61eb.pdf",
-        emisor: "Paula Bodega",
-        concepto: "Asistencia Virtual - Coordinación visitas",
-        importe: 39.44,
-        notas: "",
-      },
-      {
-        factura: "12a8891e.pdf",
-        emisor: "Roger Oriola",
-        concepto: "Marcos Atanasio",
-        importe: 100,
-        notas: "",
-      },
-      {
-        factura: "4d27b433.pdf",
-        emisor: "Roger Oriola",
-        concepto: "Jordanis",
-        importe: 100,
-        notas: "",
-      },
-      {
-        factura: "no he encontrado",
-        emisor: "Jaime Fernández",
-        concepto: "Comisión tasación Jonathan",
-        importe: 100,
-        notas: "?",
-      },
-      {
-        factura: "Factura_011_THP_2026-06-29.pdf",
-        emisor: "Paula Bodega",
-        concepto: "Comisión tasación Marcos",
-        importe: 100,
-        notas: "",
-      },
+      { factura: "Factura_008_THP_2026-06-05.pdf", emisor: "Paula Bodega", concepto: "Gestión puntual visitas", importe: 21.66, notas: "" },
+      { factura: "a81c6f5d.pdf", emisor: "Olga Postigo", concepto: "consultas 12/6", importe: 79.5, notas: "" },
+      { factura: "93aeb144.pdf", emisor: "Susana Rubio", concepto: "consultas 12/6", importe: 79.5, notas: "" },
+      { factura: "b620637c.pdf", emisor: "Roger Oriola", concepto: "Servicios de intermediación comercial", importe: 99.99, notas: "" },
+      { factura: "87bc23d8.pdf", emisor: "Roger Oriola", concepto: "Servicios de intermediación comercial", importe: 99.99, notas: "" },
+      { factura: "9cef5b59.pdf", emisor: "Roger Oriola", concepto: "Yofre Daniel Galindo Rodríguez", importe: 100, notas: "" },
+      { factura: "744b61eb.pdf", emisor: "Paula Bodega", concepto: "Asistencia Virtual - Coordinación visitas", importe: 39.44, notas: "" },
+      { factura: "12a8891e.pdf", emisor: "Roger Oriola", concepto: "Marcos Atanasio", importe: 100, notas: "" },
+      { factura: "4d27b433.pdf", emisor: "Roger Oriola", concepto: "Jordanis", importe: 100, notas: "" },
+      { factura: "no he encontrado", emisor: "Jaime Fernández", concepto: "Comisión tasación Jonathan", importe: 100, notas: "?" },
+      { factura: "Factura_011_THP_2026-06-29.pdf", emisor: "Paula Bodega", concepto: "Comisión tasación Marcos", importe: 100, notas: "" }
     ],
+
+    movimientosCuenta: []
   };
 }
 
@@ -450,270 +263,122 @@ function seedMonth() {
    CÁLCULOS
    ========================================================= */
 
-function computeTotals(mRaw) {
-  const m = normalizeMonth(mRaw);
+function computeTotals(rawMonth) {
+  const m = normalizeMonth(rawMonth);
 
-  let ingCobrados = 0;
-  let ingPendientes = 0;
+  const ingCobrados = (m.ingresos || [])
+    .filter((i) => i.cobrado === "Sí")
+    .reduce((s, i) => s + (Number(i.importe) || 0), 0);
 
-  let ingCobradosCuenta1 = 0;
-  let ingCobradosCuenta2 = 0;
+  const ingPendientes = (m.ingresos || [])
+    .filter((i) => i.cobrado === "No")
+    .reduce((s, i) => s + (Number(i.importe) || 0), 0);
 
-  let ingPendientesCuenta1 = 0;
-  let ingPendientesCuenta2 = 0;
+  const gasPagados = (m.gastos || [])
+    .filter((g) => g.estado === "Pagado")
+    .reduce((s, g) => s + (Number(g.importe) || 0), 0);
 
-  let gasPagados = 0;
-  let gasPendientes = 0;
-
-  let gasPagadosCuenta1 = 0;
-  let gasPagadosCuenta2 = 0;
-
-  let gasPendientesCuenta1 = 0;
-  let gasPendientesCuenta2 = 0;
-
-  m.ingresos.forEach((i) => {
-    const importe = Number(i.importe) || 0;
-    const cuenta = normalizeCuenta(i.cuenta);
-
-    if (i.cobrado === "Sí") {
-      ingCobrados += importe;
-
-      if (cuenta === CUENTA_2) {
-        ingCobradosCuenta2 += importe;
-      } else {
-        ingCobradosCuenta1 += importe;
-      }
-    } else {
-      ingPendientes += importe;
-
-      if (cuenta === CUENTA_2) {
-        ingPendientesCuenta2 += importe;
-      } else {
-        ingPendientesCuenta1 += importe;
-      }
-    }
-  });
-
-  m.gastos.forEach((g) => {
-    const importe = Number(g.importe) || 0;
-    const cuenta = normalizeCuenta(g.cuenta);
-
-    if (g.estado === "Pagado") {
-      gasPagados += importe;
-
-      if (cuenta === CUENTA_2) {
-        gasPagadosCuenta2 += importe;
-      } else {
-        gasPagadosCuenta1 += importe;
-      }
-    } else {
-      gasPendientes += importe;
-
-      if (cuenta === CUENTA_2) {
-        gasPendientesCuenta2 += importe;
-      } else {
-        gasPendientesCuenta1 += importe;
-      }
-    }
-  });
+  const gasPendientes = (m.gastos || [])
+    .filter((g) => g.estado === "Pendiente")
+    .reduce((s, g) => s + (Number(g.importe) || 0), 0);
 
   const totalGastos = gasPagados + gasPendientes;
   const facturacionTotal = ingCobrados + ingPendientes;
 
   /*
-   * El beneficio de la empresa NO cambia por las transferencias
-   * entre Empresa 1, CEO y Empresa 2.
+   * IMPORTANTE:
+   *
+   * El beneficio NO incluye movimientos del CEO.
+   * Tampoco incluye transferencias entre cuentas.
    */
   const beneficioNeto = ingCobrados - gasPagados;
 
-  /*
-   * RETIRADAS DEL CEO
-   *
-   * Son salidas reales de Empresa 1, pero NO son gasto.
-   */
-  const retiradasCEO = m.retiradasCEO.reduce(
-    (s, r) => s + (Number(r.importe) || 0),
-    0
-  );
+  const totalFacturasRecibidas = (m.facturas || [])
+    .reduce((s, f) => s + (Number(f.importe) || 0), 0);
 
-  /*
-   * APORTACIONES DEL CEO
-   *
-   * Son entradas reales en Empresa 2, pero NO son ingreso.
-   */
-  const aportacionesCEO = m.aportacionesCEO.reduce(
-    (s, r) => s + (Number(r.importe) || 0),
-    0
-  );
+  const accounts = {};
 
-  /*
-   * SALDO CALCULADO DE CADA CUENTA
-   *
-   * Empresa 1:
-   * saldo inicial
-   * + ingresos cobrados en Empresa 1
-   * - gastos pagados en Empresa 1
-   * - retiradas CEO
-   */
-  const saldoCalculadoCuenta1 =
-    (Number(m.saldoInicial) || 0) +
-    ingCobradosCuenta1 -
-    gasPagadosCuenta1 -
-    retiradasCEO;
+  for (const accountId of ACCOUNT_IDS) {
+    const account = m.accounts[accountId] || {};
 
-  /*
-   * Empresa 2:
-   * saldo inicial
-   * + ingresos cobrados directamente en Empresa 2
-   * + aportaciones del CEO
-   * - gastos pagados en Empresa 2
-   */
-  const saldoCalculadoCuenta2 =
-    (Number(m.saldoInicialCuenta2) || 0) +
-    ingCobradosCuenta2 +
-    aportacionesCEO -
-    gasPagadosCuenta2;
+    const ingresosCuenta = (m.ingresos || [])
+      .filter((i) => i.cobrado === "Sí" && i.cuenta === accountId)
+      .reduce((s, i) => s + (Number(i.importe) || 0), 0);
 
-  /*
-   * Dinero total calculado que debería estar dentro
-   * de las dos cuentas empresariales.
-   */
-  const saldoCalculadoEmpresa =
-    saldoCalculadoCuenta1 + saldoCalculadoCuenta2;
+    const gastosCuenta = (m.gastos || [])
+      .filter((g) => g.estado === "Pagado" && g.cuenta === accountId)
+      .reduce((s, g) => s + (Number(g.importe) || 0), 0);
 
-  /*
-   * Dinero que ha salido de Empresa 1 hacia el CEO
-   * y que posteriormente ha vuelto a Empresa 2.
-   *
-   * Si:
-   * Empresa 1 -> CEO = 5.000
-   * CEO -> Empresa 2 = 3.500
-   *
-   * Entonces:
-   * Dinero fuera de cuentas empresa = 1.500
-   */
-  const dineroFueraEmpresa =
-    retiradasCEO - aportacionesCEO;
+    /*
+     * Los movimientos de cuenta ya vienen con signo:
+     *
+     * Retirada CEO = negativo
+     * Aportación CEO = positivo
+     * Otro movimiento = según corresponda
+     */
+    const movimientosCuenta = (m.movimientosCuenta || [])
+      .filter((x) => x.cuenta === accountId)
+      .reduce((s, x) => s + (Number(x.importe) || 0), 0);
 
-  /*
-   * Si el resultado es negativo significa que el CEO
-   * ha puesto más dinero en Empresa 2 del que ha retirado
-   * previamente de Empresa 1.
-   */
-  const cajaNoDisponible = Number(m.reserva) || 0;
+    const saldoInicial = Number(account.saldoInicial) || 0;
 
-  /*
-   * El dinero económico total de la empresa incluye:
-   *
-   * dinero en cuentas empresa
-   * + dinero que está temporalmente fuera, en manos del CEO.
-   */
-  const patrimonioLiquidoEmpresa =
-    saldoCalculadoEmpresa + dineroFueraEmpresa;
+    const saldoCalculado =
+      saldoInicial +
+      ingresosCuenta -
+      gastosCuenta +
+      movimientosCuenta;
 
-  /*
-   * El flujo de caja empresarial se mantiene por compatibilidad
-   * con el sistema anterior, pero ahora se basa en la suma
-   * de las dos cuentas.
-   */
-  const flujoCaja = patrimonioLiquidoEmpresa;
+    const saldoReal =
+      account.saldoReal === null ||
+      account.saldoReal === undefined ||
+      account.saldoReal === ""
+        ? null
+        : Number(account.saldoReal);
 
-  /*
-   * CONCILIACIÓN REAL
-   */
-  const saldoRealCuenta1 =
-    m.saldoRealCuenta !== null &&
-    m.saldoRealCuenta !== undefined &&
-    m.saldoRealCuenta !== ""
-      ? Number(m.saldoRealCuenta)
+    const diferencia =
+      saldoReal === null
+        ? null
+        : saldoReal - saldoCalculado;
+
+    accounts[accountId] = {
+      ingresosCuenta,
+      gastosCuenta,
+      movimientosCuenta,
+      saldoInicial,
+      saldoCalculado,
+      saldoReal,
+      diferencia
+    };
+  }
+
+  const cajaTotalCalculada =
+    accounts.empresa1.saldoCalculado +
+    accounts.empresa2.saldoCalculado;
+
+  const cajaTotalReal =
+    accounts.empresa1.saldoReal !== null &&
+    accounts.empresa2.saldoReal !== null
+      ? accounts.empresa1.saldoReal + accounts.empresa2.saldoReal
       : null;
 
-  const saldoRealCuenta2 =
-    m.saldoRealCuenta2 !== null &&
-    m.saldoRealCuenta2 !== undefined &&
-    m.saldoRealCuenta2 !== ""
-      ? Number(m.saldoRealCuenta2)
-      : null;
-
-  const saldoRealTotal =
-    saldoRealCuenta1 !== null && saldoRealCuenta2 !== null
-      ? saldoRealCuenta1 + saldoRealCuenta2
-      : null;
-
-  /*
-   * El descuadre bancario compara SOLO dinero que debería estar
-   * dentro de las cuentas de empresa.
-   *
-   * NO suma el dinero del CEO porque no podemos ver su cuenta.
-   */
-  const diferenciaCuenta1 =
-    saldoRealCuenta1 !== null
-      ? saldoRealCuenta1 - saldoCalculadoCuenta1
-      : null;
-
-  const diferenciaCuenta2 =
-    saldoRealCuenta2 !== null
-      ? saldoRealCuenta2 - saldoCalculadoCuenta2
-      : null;
-
-  const diferenciaTotal =
-    saldoRealTotal !== null
-      ? saldoRealTotal - saldoCalculadoEmpresa
-      : null;
-
-  /*
-   * Facturas
-   */
-  const totalFacturasRecibidas = m.facturas.reduce(
-    (s, f) => s + (Number(f.importe) || 0),
-    0
-  );
+  const diferenciaCajaTotal =
+    cajaTotalReal === null
+      ? null
+      : cajaTotalReal - cajaTotalCalculada;
 
   return {
     ingCobrados,
     ingPendientes,
-
-    ingCobradosCuenta1,
-    ingCobradosCuenta2,
-
-    ingPendientesCuenta1,
-    ingPendientesCuenta2,
-
     gasPagados,
     gasPendientes,
-
-    gasPagadosCuenta1,
-    gasPagadosCuenta2,
-
-    gasPendientesCuenta1,
-    gasPendientesCuenta2,
-
     totalGastos,
     facturacionTotal,
     beneficioNeto,
-
-    retiradasCEO,
-    aportacionesCEO,
-    dineroFueraEmpresa,
-
-    saldoCalculadoCuenta1,
-    saldoCalculadoCuenta2,
-    saldoCalculadoEmpresa,
-
-    patrimonioLiquidoEmpresa,
-    flujoCaja,
-
-    cajaNoDisponible,
-
-    saldoRealCuenta1,
-    saldoRealCuenta2,
-    saldoRealTotal,
-
-    diferenciaCuenta1,
-    diferenciaCuenta2,
-    diferenciaTotal,
-
     totalFacturasRecibidas,
+    accounts,
+    cajaTotalCalculada,
+    cajaTotalReal,
+    diferenciaCajaTotal
   };
 }
 
@@ -721,46 +386,68 @@ function computeTotals(mRaw) {
    FIRESTORE
    ========================================================= */
 
-async function addMonth(nombre, saldoInicial, saldoInicialCuenta2 = 0) {
-  const ingresos = (config.partidasFijasIngresos || []).map((p) => ({
-    ...p,
-    cobrado: "No",
-    cuenta: CUENTA_1,
-  }));
+async function addMonth(nombre, accountsIniciales) {
+  const ingresos =
+    (config.partidasFijasIngresos || []).map((p) => ({
+      ...p,
+      cobrado: "No",
+      cuenta: "empresa1"
+    }));
 
-  const gastos = (config.partidasFijasGastos || []).map((p) => ({
-    ...p,
-    estado: "Pendiente",
-    cuenta: CUENTA_1,
-  }));
+  const gastos =
+    (config.partidasFijasGastos || []).map((p) => ({
+      ...p,
+      estado: "Pendiente",
+      cuenta: "empresa1"
+    }));
 
   await addDoc(mesesRef, {
     nombre,
     orden: Date.now(),
 
-    saldoInicial,
-    saldoInicialCuenta2,
+    accounts: {
+      empresa1: {
+        saldoInicial: Number(accountsIniciales?.empresa1) || 0,
+        saldoReal: null,
+        saldoRealFecha: ""
+      },
+      empresa2: {
+        saldoInicial: Number(accountsIniciales?.empresa2) || 0,
+        saldoReal: null,
+        saldoRealFecha: ""
+      }
+    },
 
     reserva: 0,
-
-    saldoRealCuenta: null,
-    saldoRealCuenta2: null,
-
-    saldoRealFecha: "",
-
     ingresos,
     gastos,
-
-    retiradasCEO: [],
-    aportacionesCEO: [],
-
     facturas: [],
+    movimientosCuenta: []
   });
 }
 
 async function saveMonthField(id, field, value) {
   await updateDoc(doc(db, "meses", id), {
-    [field]: value,
+    [field]: value
+  });
+}
+
+async function saveAccountField(id, accountId, field, value) {
+  const month = months.find((m) => m.id === id);
+  if (!month) return;
+
+  const normalized = normalizeMonth(month);
+
+  const accounts = {
+    ...normalized.accounts,
+    [accountId]: {
+      ...normalized.accounts[accountId],
+      [field]: value
+    }
+  };
+
+  await updateDoc(doc(db, "meses", id), {
+    accounts
   });
 }
 
@@ -770,19 +457,19 @@ async function removeMonth(id) {
 
 async function addCategoria(nombre) {
   await updateDoc(configRef, {
-    categoriasGastos: arrayUnion(nombre),
+    categoriasGastos: arrayUnion(nombre)
   });
 }
 
 async function removeCategoria(nombre) {
   await updateDoc(configRef, {
-    categoriasGastos: arrayRemove(nombre),
+    categoriasGastos: arrayRemove(nombre)
   });
 }
 
 async function saveConfigField(field, value) {
   await updateDoc(configRef, {
-    [field]: value,
+    [field]: value
   });
 }
 
@@ -795,13 +482,13 @@ async function addBeneficiario(data) {
     email: "",
     telefono: "",
     notas: "",
-    ...data,
+    ...data
   });
 }
 
 async function updateBeneficiarioField(id, field, value) {
   await updateDoc(doc(db, "beneficiarios", id), {
-    [field]: value,
+    [field]: value
   });
 }
 
@@ -810,7 +497,7 @@ async function removeBeneficiario(id) {
 }
 
 /* =========================================================
-   RENDER SIDEBAR
+   SIDEBAR
    ========================================================= */
 
 function renderSidebar() {
@@ -822,9 +509,10 @@ function renderSidebar() {
     const btn = document.createElement("button");
 
     btn.className =
-      "month-item" + (currentView === m.id ? " active" : "");
+      "month-item" +
+      (currentView === m.id ? " active" : "");
 
-    btn.innerHTML = `<span>📄 ${m.nombre}</span>`;
+    btn.innerHTML = `<span>📄 ${escapeHtml(m.nombre)}</span>`;
 
     btn.onclick = () => {
       currentView = m.id;
@@ -843,6 +531,10 @@ function renderSidebar() {
     .classList.toggle("active", currentView === "informes");
 
   document
+    .getElementById("nav-cuentas")
+    .classList.toggle("active", currentView === "cuentas");
+
+  document
     .getElementById("nav-beneficiarios")
     .classList.toggle("active", currentView === "beneficiarios");
 
@@ -853,36 +545,45 @@ function renderSidebar() {
   const targetMonth =
     months.find((x) => x.id === currentView) ||
     months.find((x) => x.id === informesMonthId) ||
+    months.find((x) => x.id === cuentasMonthId) ||
     months[months.length - 1];
 
   document.getElementById("pdf-target-label").textContent =
-    targetMonth ? `se exportará: ${targetMonth.nombre}` : "";
-}
-
-function statCard(label, value, tone) {
-  return `
-    <div class="stat-card">
-      <div class="stat-label">${label}</div>
-      <div class="stat-value tone-${tone}">${eur(value)}</div>
-    </div>
-  `;
+    targetMonth
+      ? `se exportará: ${targetMonth.nombre}`
+      : "";
 }
 
 /* =========================================================
    DASHBOARD
    ========================================================= */
 
+function statCard(label, value, tone) {
+  return `
+    <div class="stat-card">
+      <div class="stat-label">${label}</div>
+      <div class="stat-value tone-${tone}">
+        ${eur(value)}
+      </div>
+    </div>
+  `;
+}
+
 function renderDashboard() {
   const main = document.getElementById("main-content");
 
   main.innerHTML = `
     <div class="card card-pad">
-      <h3 class="section-title">Ingresos vs gastos por mes</h3>
+      <h3 class="section-title">
+        Ingresos vs gastos por mes
+      </h3>
       <canvas id="chartBar" height="90"></canvas>
     </div>
 
     <div class="card card-pad">
-      <h3 class="section-title">Evolución del beneficio neto</h3>
+      <h3 class="section-title">
+        Evolución del beneficio neto
+      </h3>
       <canvas id="chartLine" height="70"></canvas>
     </div>
 
@@ -895,86 +596,42 @@ function renderDashboard() {
             <th>Gastos pagados</th>
             <th>Gastos pendientes</th>
             <th>Beneficio neto</th>
+            <th>Caja empresa</th>
           </tr>
         </thead>
 
         <tbody>
-          ${months
-            .map((m) => {
-              const t = computeTotals(m);
-
-              return `
-                <tr>
-                  <td><strong>${m.nombre}</strong></td>
-
-                  <td class="tone-good">
-                    ${eur(t.ingCobrados)}
-                  </td>
-
-                  <td class="tone-bad">
-                    ${eur(t.gasPagados)}
-                  </td>
-
-                  <td class="tone-warn">
-                    ${eur(t.gasPendientes)}
-                  </td>
-
-                  <td class="${
-                    t.beneficioNeto >= 0
-                      ? "tone-good"
-                      : "tone-bad"
-                  }">
-                    <strong>${eur(t.beneficioNeto)}</strong>
-                  </td>
-                </tr>
-              `;
-            })
-            .join("")}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="card card-pad">
-      <h3 class="section-title">Situación de las cuentas</h3>
-
-      <div class="resumen-grid">
-        ${months
-          .slice()
-          .reverse()
-          .map((m) => {
+          ${months.map((m) => {
             const t = computeTotals(m);
 
             return `
-              <div class="resumen-item">
-                <div class="lbl">${m.nombre} — Empresa 1</div>
-                <div class="val">${eur(
-                  t.saldoCalculadoCuenta1
-                )}</div>
-              </div>
+              <tr>
+                <td><strong>${escapeHtml(m.nombre)}</strong></td>
 
-              <div class="resumen-item">
-                <div class="lbl">${m.nombre} — Empresa 2</div>
-                <div class="val">${eur(
-                  t.saldoCalculadoCuenta2
-                )}</div>
-              </div>
+                <td class="tone-good">
+                  ${eur(t.ingCobrados)}
+                </td>
 
-              <div class="resumen-item">
-                <div class="lbl">${m.nombre} — Dinero fuera de empresa</div>
-                <div class="val ${
-                  t.dineroFueraEmpresa > 0
-                    ? "tone-warn"
-                    : t.dineroFueraEmpresa < 0
-                    ? "tone-good"
-                    : ""
-                }">
-                  ${eur(t.dineroFueraEmpresa)}
-                </div>
-              </div>
+                <td class="tone-bad">
+                  ${eur(t.gasPagados)}
+                </td>
+
+                <td class="tone-warn">
+                  ${eur(t.gasPendientes)}
+                </td>
+
+                <td class="${t.beneficioNeto >= 0 ? "tone-good" : "tone-bad"}">
+                  <strong>${eur(t.beneficioNeto)}</strong>
+                </td>
+
+                <td>
+                  <strong>${eur(t.cajaTotalCalculada)}</strong>
+                </td>
+              </tr>
             `;
-          })
-          .join("")}
-      </div>
+          }).join("")}
+        </tbody>
+      </table>
     </div>
   `;
 
@@ -991,31 +648,31 @@ function renderDashboard() {
         {
           label: "Ingresos",
           data: totals.map((t) => t.ingCobrados),
-          backgroundColor: "#0f766e",
+          backgroundColor: "#0f766e"
         },
 
         {
           label: "Gastos pagados",
           data: totals.map((t) => t.gasPagados),
-          backgroundColor: "#be123c",
+          backgroundColor: "#be123c"
         },
 
         {
           label: "Gastos pendientes",
           data: totals.map((t) => t.gasPendientes),
-          backgroundColor: "#d97706",
-        },
-      ],
+          backgroundColor: "#d97706"
+        }
+      ]
     },
 
     options: {
       responsive: true,
       plugins: {
         legend: {
-          position: "bottom",
-        },
-      },
-    },
+          position: "bottom"
+        }
+      }
+    }
   });
 
   new Chart(document.getElementById("chartLine"), {
@@ -1031,21 +688,525 @@ function renderDashboard() {
           borderColor: "#0f766e",
           backgroundColor: "#0f766e33",
           tension: 0.3,
-          fill: true,
-        },
-      ],
+          fill: true
+        }
+      ]
     },
 
     options: {
       responsive: true,
-
       plugins: {
         legend: {
-          display: false,
-        },
-      },
-    },
+          display: false
+        }
+      }
+    }
   });
+}
+
+/* =========================================================
+   CUENTAS
+   ========================================================= */
+
+function renderAccountCard(m, t, accountId) {
+  const a = t.accounts[accountId];
+  const name =
+    config.cuentas?.[accountId] ||
+    ACCOUNT_NAMES[accountId];
+
+  const diffTone =
+    a.diferencia === null
+      ? ""
+      : Math.abs(a.diferencia) < 0.01
+        ? "tone-good"
+        : "tone-bad";
+
+  return `
+    <div class="account-card">
+
+      <div class="account-card-header">
+        <h3>🏦 ${escapeHtml(name)}</h3>
+        <p>
+          Saldo calculado a partir de los movimientos registrados
+        </p>
+      </div>
+
+      <div class="account-body">
+
+        <div class="account-mini-grid">
+
+          <div class="account-mini-item">
+            <div class="lbl">Saldo inicial</div>
+            <input
+              class="account-real-input"
+              type="number"
+              step="0.01"
+              data-account-field="saldoInicial"
+              data-account-id="${accountId}"
+              value="${a.saldoInicial}"
+            />
+          </div>
+
+          <div class="account-mini-item">
+            <div class="lbl">Saldo calculado</div>
+            <div class="account-balance ${a.saldoCalculado >= 0 ? "tone-good" : "tone-bad"}">
+              ${eur(a.saldoCalculado)}
+            </div>
+          </div>
+
+        </div>
+
+        <div class="account-mini-grid">
+
+          <div class="account-mini-item">
+            <div class="lbl">Ingresos cobrados</div>
+            <div class="val tone-good">
+              ${eur(a.ingresosCuenta)}
+            </div>
+          </div>
+
+          <div class="account-mini-item">
+            <div class="lbl">Gastos pagados</div>
+            <div class="val tone-bad">
+              ${eur(a.gastosCuenta)}
+            </div>
+          </div>
+
+          <div class="account-mini-item">
+            <div class="lbl">Movimientos CEO / caja</div>
+            <div class="val ${a.movimientosCuenta >= 0 ? "tone-good" : "tone-bad"}">
+              ${eur(a.movimientosCuenta)}
+            </div>
+          </div>
+
+          <div class="account-mini-item">
+            <div class="lbl">Saldo real banco</div>
+            <input
+              class="account-real-input"
+              type="number"
+              step="0.01"
+              data-account-field="saldoReal"
+              data-account-id="${accountId}"
+              value="${a.saldoReal ?? ""}"
+              placeholder="Sin comprobar"
+            />
+          </div>
+
+        </div>
+
+        <div style="margin-top:14px;">
+          <div class="account-mini-item">
+            <div class="lbl">Fecha de comprobación</div>
+
+            <input
+              class="account-date-input"
+              type="date"
+              data-account-field="saldoRealFecha"
+              data-account-id="${accountId}"
+              value="${a.saldoRealFecha || ""}"
+            />
+          </div>
+        </div>
+
+        <div style="margin-top:14px;">
+          <div class="lbl" style="font-size:10px;color:var(--stone-400);">
+            Diferencia banco vs cálculo
+          </div>
+
+          <div class="val ${diffTone}" style="font-family:var(--mono);font-size:15px;">
+            ${
+              a.diferencia === null
+                ? "—"
+                : `<strong>${eur(a.diferencia)}</strong>`
+            }
+          </div>
+        </div>
+
+      </div>
+    </div>
+  `;
+}
+
+function renderCuentas() {
+  if (!months.length) {
+    document.getElementById("main-content").innerHTML =
+      `<div class="card card-pad">Todavía no hay meses.</div>`;
+
+    return;
+  }
+
+  if (
+    !cuentasMonthId ||
+    !months.find((m) => m.id === cuentasMonthId)
+  ) {
+    cuentasMonthId = months[months.length - 1].id;
+  }
+
+  const m = normalizeMonth(
+    months.find((x) => x.id === cuentasMonthId)
+  );
+
+  const t = computeTotals(m);
+
+  const diferenciaTotal =
+    t.diferenciaCajaTotal;
+
+  const movimientos = m.movimientosCuenta || [];
+
+  const movementRows = movimientos.map((r, i) => `
+    <tr>
+
+      <td>
+        <input
+          type="date"
+          data-mov-field="fecha"
+          data-i="${i}"
+          value="${r.fecha || ""}"
+        >
+      </td>
+
+      <td>
+        <select
+          data-mov-field="tipo"
+          data-i="${i}"
+          class="movement-type-${r.importe < 0 ? "ceo-out" : "ceo-in"}"
+        >
+          <option value="Retirada CEO"
+            ${r.tipo === "Retirada CEO" ? "selected" : ""}>
+            Retirada CEO
+          </option>
+
+          <option value="Aportación CEO"
+            ${r.tipo === "Aportación CEO" ? "selected" : ""}>
+            Aportación CEO
+          </option>
+
+          <option value="Otro movimiento"
+            ${r.tipo === "Otro movimiento" ? "selected" : ""}>
+            Otro movimiento
+          </option>
+        </select>
+      </td>
+
+      <td>
+        <select
+          data-mov-field="cuenta"
+          data-i="${i}"
+          class="account-select"
+        >
+          ${ACCOUNT_IDS.map((id) => `
+            <option value="${id}"
+              ${r.cuenta === id ? "selected" : ""}>
+              ${escapeHtml(config.cuentas?.[id] || ACCOUNT_NAMES[id])}
+            </option>
+          `).join("")}
+        </select>
+      </td>
+
+      <td>
+        <input
+          data-mov-field="concepto"
+          data-i="${i}"
+          value="${escapeHtml(r.concepto)}"
+          placeholder="Ej. Retirada para gastos personales"
+        >
+      </td>
+
+      <td>
+        <input
+          type="number"
+          step="0.01"
+          data-mov-field="importe"
+          data-i="${i}"
+          value="${r.importe}"
+          title="Negativo = salida / positivo = entrada"
+        >
+      </td>
+
+      <td>
+        <button
+          class="btn-del"
+          data-del-mov="${i}"
+        >
+          ✕
+        </button>
+      </td>
+
+    </tr>
+  `).join("");
+
+  const main = document.getElementById("main-content");
+
+  main.innerHTML = `
+
+    <div class="month-header">
+      <div>
+        <h2>🏦 Cuentas de empresa</h2>
+
+        <div class="config-hint">
+          Control independiente de las dos cuentas bancarias.
+        </div>
+      </div>
+
+      <select id="cuentas-month-select">
+        ${months.map((mm) => `
+          <option value="${mm.id}"
+            ${mm.id === m.id ? "selected" : ""}>
+            ${escapeHtml(mm.nombre)}
+          </option>
+        `).join("")}
+      </select>
+    </div>
+
+    <div class="good-box">
+      <strong>Importante:</strong>
+      las retiradas y aportaciones del CEO afectan al saldo bancario,
+      pero <strong>no afectan al beneficio de la empresa</strong>.
+      El beneficio solo utiliza ingresos cobrados y gastos pagados.
+    </div>
+
+    <div class="account-grid">
+      ${renderAccountCard(m, t, "empresa1")}
+      ${renderAccountCard(m, t, "empresa2")}
+    </div>
+
+    <div class="card">
+      <div class="account-summary-total">
+        <span>Saldo calculado total de las dos cuentas</span>
+        <strong>${eur(t.cajaTotalCalculada)}</strong>
+      </div>
+
+      <div class="account-summary-total">
+        <span>Saldo real total de las dos cuentas</span>
+        <strong>
+          ${
+            t.cajaTotalReal === null
+              ? "—"
+              : eur(t.cajaTotalReal)
+          }
+        </strong>
+      </div>
+
+      <div class="account-summary-total">
+        <span>Diferencia total</span>
+        <strong class="${
+          diferenciaTotal === null
+            ? ""
+            : Math.abs(diferenciaTotal) < 0.01
+              ? "tone-good"
+              : "tone-bad"
+        }">
+          ${
+            diferenciaTotal === null
+              ? "—"
+              : eur(diferenciaTotal)
+          }
+        </strong>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <div>
+          <span class="section-title">
+            Movimientos de caja / CEO
+          </span>
+
+          <span class="section-count">
+            ${movimientos.length}
+          </span>
+        </div>
+
+        <button class="btn-add" id="btn-add-movement">
+          + Añadir movimiento
+        </button>
+      </div>
+
+      <div class="config-hint" style="padding:10px 16px 4px;">
+        Aquí se registran movimientos que afectan al banco pero que
+        <strong>no son ingresos ni gastos de la actividad</strong>.
+        Usa importes negativos para salidas y positivos para entradas.
+      </div>
+
+      <div class="table-scroll">
+
+        <table>
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Tipo</th>
+              <th>Cuenta</th>
+              <th>Concepto</th>
+              <th>Importe</th>
+              <th></th>
+            </tr>
+          </thead>
+
+          <tbody>
+            ${
+              movementRows ||
+              `
+                <tr>
+                  <td colspan="6"
+                      style="padding:16px;color:var(--stone-400);">
+                    No hay movimientos de este tipo registrados.
+                  </td>
+                </tr>
+              `
+            }
+          </tbody>
+        </table>
+
+      </div>
+    </div>
+  `;
+
+  document
+    .getElementById("cuentas-month-select")
+    .addEventListener("change", (e) => {
+      cuentasMonthId = e.target.value;
+      render();
+    });
+
+  main
+    .querySelectorAll("[data-account-field]")
+    .forEach((el) => {
+
+      el.addEventListener("change", async (e) => {
+
+        const accountId =
+          e.target.dataset.accountId;
+
+        const field =
+          e.target.dataset.accountField;
+
+        let value;
+
+        if (field === "saldoReal") {
+          value =
+            e.target.value === ""
+              ? null
+              : Number(e.target.value);
+        } else if (field === "saldoInicial") {
+          value =
+            Number(e.target.value) || 0;
+        } else {
+          value = e.target.value;
+        }
+
+        await saveAccountField(
+          m.id,
+          accountId,
+          field,
+          value
+        );
+      });
+    });
+
+  main
+    .querySelectorAll("[data-mov-field]")
+    .forEach((el) => {
+
+      el.addEventListener("change", async (e) => {
+
+        const i =
+          Number(e.target.dataset.i);
+
+        const field =
+          e.target.dataset.movField;
+
+        const newArr = [
+          ...(m.movimientosCuenta || [])
+        ];
+
+        let value = e.target.value;
+
+        if (field === "importe") {
+          value =
+            Number(e.target.value) || 0;
+        }
+
+        newArr[i] = {
+          ...newArr[i],
+          [field]: value
+        };
+
+        /*
+         * Si el usuario selecciona Retirada CEO
+         * y el importe es positivo, lo convertimos
+         * automáticamente en negativo.
+         *
+         * Si selecciona Aportación CEO y el importe
+         * es negativo, lo convertimos en positivo.
+         */
+        if (field === "tipo") {
+          if (
+            value === "Retirada CEO" &&
+            Number(newArr[i].importe) > 0
+          ) {
+            newArr[i].importe =
+              -Math.abs(Number(newArr[i].importe));
+          }
+
+          if (
+            value === "Aportación CEO" &&
+            Number(newArr[i].importe) < 0
+          ) {
+            newArr[i].importe =
+              Math.abs(Number(newArr[i].importe));
+          }
+        }
+
+        await saveMonthField(
+          m.id,
+          "movimientosCuenta",
+          newArr
+        );
+      });
+    });
+
+  document
+    .getElementById("btn-add-movement")
+    .addEventListener("click", async () => {
+
+      const newMovement = {
+        fecha: "",
+        tipo: "Retirada CEO",
+        cuenta: "empresa1",
+        concepto: "",
+        importe: 0
+      };
+
+      await saveMonthField(
+        m.id,
+        "movimientosCuenta",
+        [
+          ...(m.movimientosCuenta || []),
+          newMovement
+        ]
+      );
+    });
+
+  main
+    .querySelectorAll("[data-del-mov]")
+    .forEach((el) => {
+
+      el.addEventListener("click", async () => {
+
+        const i =
+          Number(el.dataset.delMov);
+
+        const newArr =
+          (m.movimientosCuenta || [])
+            .filter((_, idx) => idx !== i);
+
+        await saveMonthField(
+          m.id,
+          "movimientosCuenta",
+          newArr
+        );
+      });
+    });
 }
 
 /* =========================================================
@@ -1056,11 +1217,10 @@ function renderInformes() {
   const main = document.getElementById("main-content");
 
   if (!months.length) {
-    main.innerHTML = `
-      <div class="card card-pad">
+    main.innerHTML =
+      `<div class="card card-pad">
         Todavía no hay meses para generar un informe.
-      </div>
-    `;
+      </div>`;
 
     return;
   }
@@ -1069,38 +1229,45 @@ function renderInformes() {
     !informesMonthId ||
     !months.find((x) => x.id === informesMonthId)
   ) {
-    informesMonthId = months[months.length - 1].id;
+    informesMonthId =
+      months[months.length - 1].id;
   }
 
-  const m = normalizeMonth(
-    months.find((x) => x.id === informesMonthId)
-  );
+  const m =
+    months.find((x) => x.id === informesMonthId);
 
   const t = computeTotals(m);
 
-  const objetivo = Number(config.margenObjetivo ?? 30);
+  const objetivo =
+    Number(config.margenObjetivo ?? 30);
 
   const margenActual =
     t.ingCobrados > 0
       ? (t.beneficioNeto / t.ingCobrados) * 100
       : 0;
 
-  const cumple = margenActual >= objetivo;
+  const cumple =
+    margenActual >= objetivo;
 
   const porCategoria = {};
 
-  m.gastos.forEach((g) => {
-    const cat = g.categoria || "Sin categoría";
+  (m.gastos || []).forEach((g) => {
+    const cat =
+      g.categoria || "Sin categoría";
 
     porCategoria[cat] =
       (porCategoria[cat] || 0) +
       (Number(g.importe) || 0);
   });
 
-  const catLabels = Object.keys(porCategoria);
-  const catValues = Object.values(porCategoria);
+  const catLabels =
+    Object.keys(porCategoria);
+
+  const catValues =
+    Object.values(porCategoria);
 
   main.innerHTML = `
+
     <div class="card card-pad">
 
       <div style="
@@ -1117,22 +1284,12 @@ function renderInformes() {
         </h3>
 
         <select id="informe-month-select">
-          ${months
-            .map(
-              (mm) => `
-                <option
-                  value="${mm.id}"
-                  ${
-                    mm.id === m.id
-                      ? "selected"
-                      : ""
-                  }
-                >
-                  ${mm.nombre}
-                </option>
-              `
-            )
-            .join("")}
+          ${months.map((mm) => `
+            <option value="${mm.id}"
+              ${mm.id === m.id ? "selected" : ""}>
+              ${escapeHtml(mm.nombre)}
+            </option>
+          `).join("")}
         </select>
 
       </div>
@@ -1166,7 +1323,7 @@ function renderInformes() {
                   cumple
                     ? "#047857"
                     : "#be123c"
-                }
+                };
               "
             ></div>
           </div>
@@ -1188,94 +1345,69 @@ function renderInformes() {
 
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:12px;"
-      >
-        Situación de tesorería — ${m.nombre}
+      <h3 class="section-title">
+        Resultado económico
       </h3>
 
       <div class="resumen-grid">
 
         <div class="resumen-item">
-          <div class="lbl">Empresa 1</div>
-          <div class="val">
-            ${eur(t.saldoCalculadoCuenta1)}
+          <div class="lbl">Ingresos cobrados</div>
+          <div class="val tone-good">
+            ${eur(t.ingCobrados)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">Empresa 2</div>
-          <div class="val">
-            ${eur(t.saldoCalculadoCuenta2)}
+          <div class="lbl">Gastos pagados</div>
+          <div class="val tone-bad">
+            ${eur(t.gasPagados)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">Total en cuentas empresa</div>
-          <div class="val">
-            <strong>${eur(t.saldoCalculadoEmpresa)}</strong>
-          </div>
-        </div>
-
-        <div class="resumen-item">
-          <div class="lbl">Dinero fuera de empresa</div>
+          <div class="lbl">Beneficio neto</div>
           <div class="val ${
-            t.dineroFueraEmpresa > 0
-              ? "tone-warn"
-              : t.dineroFueraEmpresa < 0
+            t.beneficioNeto >= 0
               ? "tone-good"
-              : ""
+              : "tone-bad"
           }">
-            <strong>${eur(t.dineroFueraEmpresa)}</strong>
+            <strong>${eur(t.beneficioNeto)}</strong>
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">Patrimonio líquido empresarial</div>
+          <div class="lbl">Caja total calculada</div>
           <div class="val">
-            <strong>${eur(
-              t.patrimonioLiquidoEmpresa
-            )}</strong>
+            <strong>${eur(t.cajaTotalCalculada)}</strong>
           </div>
         </div>
 
       </div>
 
-      <p
-        class="config-hint"
-        style="margin-top:12px;"
-      >
-        Las transferencias entre la empresa y la cuenta personal del CEO
-        no se consideran ingresos ni gastos. Si el CEO retira dinero de
-        Empresa 1 y después devuelve una cantidad diferente a Empresa 2,
-        la diferencia queda reflejada como dinero fuera de las cuentas
-        empresariales.
+      <p class="config-hint">
+        Las retiradas y aportaciones del CEO no aparecen en el
+        beneficio porque no son ingresos ni gastos de explotación.
+        Solo modifican el saldo de las cuentas bancarias.
       </p>
 
     </div>
 
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:12px;"
-      >
-        Gastos por categoría — ${m.nombre}
+      <h3 class="section-title"
+          style="margin-bottom:12px;">
+        Gastos por categoría — ${escapeHtml(m.nombre)}
       </h3>
 
       ${
         catLabels.length
-          ? `
-            <div class="chart-wrap">
-              <canvas id="chartPie"></canvas>
-            </div>
-          `
-          : `
-            <div class="config-hint">
-              Todavía no hay gastos con importe este mes.
-            </div>
-          `
+          ? `<div class="chart-wrap">
+               <canvas id="chartPie"></canvas>
+             </div>`
+          : `<div class="config-hint">
+               Todavía no hay gastos con importe este mes.
+             </div>`
       }
 
     </div>
@@ -1284,39 +1416,45 @@ function renderInformes() {
   document
     .getElementById("informe-month-select")
     .addEventListener("change", (e) => {
-      informesMonthId = e.target.value;
+      informesMonthId =
+        e.target.value;
+
       render();
     });
 
   if (catLabels.length) {
-    new Chart(document.getElementById("chartPie"), {
-      type: "doughnut",
 
-      data: {
-        labels: catLabels,
+    new Chart(
+      document.getElementById("chartPie"),
+      {
+        type: "doughnut",
 
-        datasets: [
-          {
-            data: catValues,
-            backgroundColor:
-              PIE_COLORS.slice(
-                0,
-                catLabels.length
-              ),
-          },
-        ],
-      },
+        data: {
+          labels: catLabels,
 
-      options: {
-        responsive: true,
-
-        plugins: {
-          legend: {
-            position: "bottom",
-          },
+          datasets: [
+            {
+              data: catValues,
+              backgroundColor:
+                PIE_COLORS.slice(
+                  0,
+                  catLabels.length
+                )
+            }
+          ]
         },
-      },
-    });
+
+        options: {
+          responsive: true,
+
+          plugins: {
+            legend: {
+              position: "bottom"
+            }
+          }
+        }
+      }
+    );
   }
 }
 
@@ -1325,18 +1463,18 @@ function renderInformes() {
    ========================================================= */
 
 function renderBeneficiarios() {
-  const main = document.getElementById("main-content");
+  const main =
+    document.getElementById("main-content");
 
-  const rows = beneficiarios
-    .map(
-      (b) => `
+  const rows =
+    beneficiarios.map((b) => `
       <tr>
 
         <td>
           <input
             data-bf="nombre"
             data-id="${b.id}"
-            value="${b.nombre || ""}"
+            value="${escapeHtml(b.nombre)}"
           >
         </td>
 
@@ -1344,7 +1482,7 @@ function renderBeneficiarios() {
           <input
             data-bf="iban"
             data-id="${b.id}"
-            value="${b.iban || ""}"
+            value="${escapeHtml(b.iban)}"
             style="font-family:var(--mono)"
           >
         </td>
@@ -1353,7 +1491,7 @@ function renderBeneficiarios() {
           <input
             data-bf="nif"
             data-id="${b.id}"
-            value="${b.nif || ""}"
+            value="${escapeHtml(b.nif)}"
           >
         </td>
 
@@ -1361,7 +1499,7 @@ function renderBeneficiarios() {
           <input
             data-bf="email"
             data-id="${b.id}"
-            value="${b.email || ""}"
+            value="${escapeHtml(b.email)}"
           >
         </td>
 
@@ -1369,7 +1507,7 @@ function renderBeneficiarios() {
           <input
             data-bf="telefono"
             data-id="${b.id}"
-            value="${b.telefono || ""}"
+            value="${escapeHtml(b.telefono)}"
           >
         </td>
 
@@ -1377,7 +1515,7 @@ function renderBeneficiarios() {
           <input
             data-bf="notas"
             data-id="${b.id}"
-            value="${b.notas || ""}"
+            value="${escapeHtml(b.notas)}"
           >
         </td>
 
@@ -1391,11 +1529,10 @@ function renderBeneficiarios() {
         </td>
 
       </tr>
-    `
-    )
-    .join("");
+    `).join("");
 
   main.innerHTML = `
+
     <div class="card">
 
       <div class="section-header">
@@ -1441,15 +1578,11 @@ function renderBeneficiarios() {
 
       ${
         !beneficiarios.length
-          ? `
-            <div
-              class="config-hint"
-              style="padding:12px 16px;"
-            >
-              Todavía no hay fichas guardadas.
-              Añade la primera con el botón de arriba.
-            </div>
-          `
+          ? `<div class="config-hint"
+                 style="padding:12px 16px;">
+               Todavía no hay fichas guardadas.
+               Añade la primera con el botón de arriba.
+             </div>`
           : ""
       }
 
@@ -1458,26 +1591,31 @@ function renderBeneficiarios() {
 
   document
     .getElementById("btn-add-beneficiario")
-    .addEventListener("click", () =>
-      addBeneficiario({})
+    .addEventListener(
+      "click",
+      () => addBeneficiario({})
     );
 
   main
     .querySelectorAll("[data-bf]")
     .forEach((el) => {
-      el.addEventListener("change", (e) =>
+
+      el.addEventListener("change", (e) => {
+
         updateBeneficiarioField(
           e.target.dataset.id,
           e.target.dataset.bf,
           e.target.value
-        )
-      );
+        );
+      });
     });
 
   main
     .querySelectorAll("[data-delbf]")
     .forEach((el) => {
+
       el.addEventListener("click", () => {
+
         if (
           confirm(
             "¿Eliminar esta ficha de pago?"
@@ -1496,84 +1634,80 @@ function renderBeneficiarios() {
    ========================================================= */
 
 function renderConfig() {
-  const main = document.getElementById("main-content");
+  const main =
+    document.getElementById("main-content");
 
   const catList =
     (config.categoriasGastos || [])
-      .map(
-        (c) => `
-          <span class="tag">
-            ${c}
-            <button
-              data-cat="${c}"
-              title="Eliminar categoría"
-            >
-              ✕
-            </button>
-          </span>
-        `
-      )
+      .map((c) => `
+        <span class="tag">
+          ${escapeHtml(c)}
+
+          <button
+            data-cat="${escapeHtml(c)}"
+            title="Eliminar categoría"
+          >
+            ✕
+          </button>
+        </span>
+      `)
       .join("") ||
-    `
-      <span class="config-hint">
-        Todavía no hay categorías.
-        Añade la primera abajo.
-      </span>
-    `;
+    `<span class="config-hint">
+       Todavía no hay categorías.
+     </span>`;
 
   const pfIngresosRows =
     (config.partidasFijasIngresos || [])
-      .map(
-        (r, i) => `
-          <tr>
+      .map((r, i) => `
+        <tr>
 
-            <td>
-              <input
-                data-pf="ingresos"
-                data-i="${i}"
-                data-f="cliente"
-                value="${r.cliente || ""}"
-              >
-            </td>
+          <td>
+            <input
+              data-pf="ingresos"
+              data-i="${i}"
+              data-f="cliente"
+              value="${escapeHtml(r.cliente)}"
+            >
+          </td>
 
-            <td>
-              <input
-                data-pf="ingresos"
-                data-i="${i}"
-                data-f="concepto"
-                value="${r.concepto || ""}"
-              >
-            </td>
+          <td>
+            <input
+              data-pf="ingresos"
+              data-i="${i}"
+              data-f="concepto"
+              value="${escapeHtml(r.concepto)}"
+            >
+          </td>
 
-            <td>
-              <input
-                type="number"
-                step="0.01"
-                data-pf="ingresos"
-                data-i="${i}"
-                data-f="importe"
-                value="${r.importe || 0}"
-              >
-            </td>
+          <td>
+            <input
+              type="number"
+              step="0.01"
+              data-pf="ingresos"
+              data-i="${i}"
+              data-f="importe"
+              value="${r.importe || 0}"
+            >
+          </td>
 
-            <td>
-              <button
-                class="btn-del"
-                data-delpf="ingresos"
-                data-i="${i}"
-              >
-                ✕
-              </button>
-            </td>
+          <td>
+            <button
+              class="btn-del"
+              data-delpf="ingresos"
+              data-i="${i}"
+            >
+              ✕
+            </button>
+          </td>
 
-          </tr>
-        `
-      )
+        </tr>
+      `)
       .join("");
 
   const pfGastosRows =
     (config.partidasFijasGastos || [])
       .map((r, i) => {
+
         const opts =
           config.categoriasGastos || [];
 
@@ -1585,7 +1719,7 @@ function renderConfig() {
                 data-pf="gastos"
                 data-i="${i}"
                 data-f="concepto"
-                value="${r.concepto || ""}"
+                value="${escapeHtml(r.concepto)}"
               >
             </td>
 
@@ -1595,7 +1729,6 @@ function renderConfig() {
                 data-i="${i}"
                 data-f="categoria"
               >
-
                 <option
                   value=""
                   ${!r.categoria ? "selected" : ""}
@@ -1603,22 +1736,14 @@ function renderConfig() {
                   —
                 </option>
 
-                ${opts
-                  .map(
-                    (c) => `
-                      <option
-                        value="${c}"
-                        ${
-                          r.categoria === c
-                            ? "selected"
-                            : ""
-                        }
-                      >
-                        ${c}
-                      </option>
-                    `
-                  )
-                  .join("")}
+                ${opts.map((c) => `
+                  <option
+                    value="${escapeHtml(c)}"
+                    ${r.categoria === c ? "selected" : ""}
+                  >
+                    ${escapeHtml(c)}
+                  </option>
+                `).join("")}
 
               </select>
             </td>
@@ -1650,21 +1775,71 @@ function renderConfig() {
       .join("");
 
   main.innerHTML = `
+
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:8px;"
-      >
+      <h3 class="section-title"
+          style="margin-bottom:8px;">
+        Cuentas de empresa
+      </h3>
+
+      <p class="config-hint"
+         style="margin-top:0;margin-bottom:14px;">
+        Puedes poner aquí los nombres reales de las dos cuentas.
+        No se utiliza la cuenta personal del CEO como tercera cuenta.
+      </p>
+
+      <div class="resumen-grid">
+
+        <div class="resumen-item">
+
+          <div class="lbl">
+            Cuenta empresa 1
+          </div>
+
+          <input
+            type="text"
+            id="f-account-name-1"
+            value="${escapeHtml(
+              config.cuentas?.empresa1 ||
+              "Cuenta Empresa 1"
+            )}"
+          >
+
+        </div>
+
+        <div class="resumen-item">
+
+          <div class="lbl">
+            Cuenta empresa 2
+          </div>
+
+          <input
+            type="text"
+            id="f-account-name-2"
+            value="${escapeHtml(
+              config.cuentas?.empresa2 ||
+              "Cuenta Empresa 2"
+            )}"
+          >
+
+        </div>
+
+      </div>
+
+    </div>
+
+    <div class="card card-pad">
+
+      <h3 class="section-title"
+          style="margin-bottom:8px;">
         Margen objetivo
       </h3>
 
-      <p
-        class="config-hint"
-        style="margin-top:0;margin-bottom:10px;"
-      >
-        Porcentaje de los ingresos que quieres que
-        quede como beneficio neto.
+      <p class="config-hint"
+         style="margin-top:0;margin-bottom:10px;">
+        Porcentaje de los ingresos que quieres que quede como
+        beneficio neto.
       </p>
 
       <div class="target-input-row">
@@ -1686,19 +1861,14 @@ function renderConfig() {
 
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:4px;"
-      >
+      <h3 class="section-title"
+          style="margin-bottom:4px;">
         Categorías de gastos
       </h3>
 
-      <p
-        class="config-hint"
-        style="margin-top:0;margin-bottom:14px;"
-      >
-        Opciones del desplegable "Categoría"
-        en la tabla de Gastos.
+      <p class="config-hint"
+         style="margin-top:0;margin-bottom:14px;">
+        Opciones del desplegable "Categoría".
       </p>
 
       <div
@@ -1729,8 +1899,7 @@ function renderConfig() {
       </form>
 
       <div class="config-hint">
-        Borrar una categoría no afecta a los gastos
-        ya guardados con ella.
+        Borrar una categoría no afecta a los gastos ya guardados.
       </div>
 
     </div>
@@ -1745,12 +1914,7 @@ function renderConfig() {
           </span>
 
           <span class="section-count">
-            ${
-              (
-                config.partidasFijasIngresos ||
-                []
-              ).length
-            }
+            ${(config.partidasFijasIngresos || []).length}
           </span>
         </div>
 
@@ -1763,13 +1927,9 @@ function renderConfig() {
 
       </div>
 
-      <p
-        class="config-hint"
-        style="padding:8px 16px 0;"
-      >
-        Se precargan automáticamente como
-        "No cobrado" en Empresa 1 cada vez que
-        creas un mes nuevo.
+      <p class="config-hint"
+         style="padding:8px 16px 0;">
+        Se precargan como "No cobrado" en cada mes nuevo.
       </p>
 
       <table>
@@ -1801,12 +1961,7 @@ function renderConfig() {
           </span>
 
           <span class="section-count">
-            ${
-              (
-                config.partidasFijasGastos ||
-                []
-              ).length
-            }
+            ${(config.partidasFijasGastos || []).length}
           </span>
         </div>
 
@@ -1819,13 +1974,9 @@ function renderConfig() {
 
       </div>
 
-      <p
-        class="config-hint"
-        style="padding:8px 16px 0;"
-      >
-        Se precargan automáticamente como
-        "Pendiente" en Empresa 1 cada vez que
-        creas un mes nuevo.
+      <p class="config-hint"
+         style="padding:8px 16px 0;">
+        Se precargan como "Pendiente" en cada mes nuevo.
       </p>
 
       <table>
@@ -1849,26 +2000,60 @@ function renderConfig() {
   `;
 
   document
+    .getElementById("f-account-name-1")
+    .addEventListener("change", async (e) => {
+
+      await saveConfigField(
+        "cuentas",
+        {
+          ...(config.cuentas || {}),
+          empresa1: e.target.value.trim() ||
+            "Cuenta Empresa 1"
+        }
+      );
+    });
+
+  document
+    .getElementById("f-account-name-2")
+    .addEventListener("change", async (e) => {
+
+      await saveConfigField(
+        "cuentas",
+        {
+          ...(config.cuentas || {}),
+          empresa2: e.target.value.trim() ||
+            "Cuenta Empresa 2"
+        }
+      );
+    });
+
+  document
     .getElementById("f-margen")
-    .addEventListener("change", (e) =>
+    .addEventListener("change", (e) => {
+
       saveConfigField(
         "margenObjetivo",
         Number(e.target.value) || 0
-      )
-    );
+      );
+    });
 
   document
     .getElementById("tag-list")
     .querySelectorAll("[data-cat]")
     .forEach((btn) => {
-      btn.addEventListener("click", () =>
-        removeCategoria(btn.dataset.cat)
-      );
+
+      btn.addEventListener("click", () => {
+
+        removeCategoria(
+          btn.dataset.cat
+        );
+      });
     });
 
   document
     .getElementById("add-tag-form")
     .addEventListener("submit", (e) => {
+
       e.preventDefault();
 
       const input =
@@ -1876,14 +2061,14 @@ function renderConfig() {
           "new-tag-input"
         );
 
-      const val = input.value.trim();
+      const val =
+        input.value.trim();
 
       if (!val) return;
 
       if (
-        (config.categoriasGastos || []).includes(
-          val
-        )
+        (config.categoriasGastos || [])
+          .includes(val)
       ) {
         input.value = "";
         return;
@@ -1897,13 +2082,14 @@ function renderConfig() {
   main
     .querySelectorAll("[data-pf]")
     .forEach((el) => {
+
       el.addEventListener("change", (e) => {
+
         const arr =
           e.target.dataset.pf;
 
-        const i = Number(
-          e.target.dataset.i
-        );
+        const i =
+          Number(e.target.dataset.i);
 
         const f =
           e.target.dataset.f;
@@ -1913,26 +2099,30 @@ function renderConfig() {
             ? "partidasFijasIngresos"
             : "partidasFijasGastos";
 
-        const list = [
-          ...(config[field] || []),
-        ];
+        const list =
+          [...(config[field] || [])];
 
         list[i] = {
           ...list[i],
           [f]:
             e.target.type === "number"
               ? Number(e.target.value) || 0
-              : e.target.value,
+              : e.target.value
         };
 
-        saveConfigField(field, list);
+        saveConfigField(
+          field,
+          list
+        );
       });
     });
 
   main
     .querySelectorAll("[data-addpf]")
     .forEach((el) => {
+
       el.addEventListener("click", () => {
+
         const arr =
           el.dataset.addpf;
 
@@ -1946,42 +2136,46 @@ function renderConfig() {
             ? {
                 cliente: "",
                 concepto: "",
-                importe: 0,
+                importe: 0
               }
             : {
                 concepto: "",
                 categoria: "",
-                importe: 0,
+                importe: 0
               };
 
-        saveConfigField(field, [
-          ...(config[field] || []),
-          blank,
-        ]);
+        saveConfigField(
+          field,
+          [
+            ...(config[field] || []),
+            blank
+          ]
+        );
       });
     });
 
   main
     .querySelectorAll("[data-delpf]")
     .forEach((el) => {
+
       el.addEventListener("click", () => {
+
         const arr =
           el.dataset.delpf;
 
-        const i = Number(
-          el.dataset.i
-        );
+        const i =
+          Number(el.dataset.i);
 
         const field =
           arr === "ingresos"
             ? "partidasFijasIngresos"
             : "partidasFijasGastos";
 
-        const list = (
-          config[field] || []
-        ).filter(
-          (_, idx) => idx !== i
-        );
+        const list =
+          (config[field] || [])
+            .filter(
+              (_, idx) => idx !== i
+            );
 
         saveConfigField(
           field,
@@ -1992,41 +2186,11 @@ function renderConfig() {
 }
 
 /* =========================================================
-   HELPERS DE HTML
-   ========================================================= */
-
-function cuentaOptions(selected) {
-  return `
-    <option
-      value="${CUENTA_1}"
-      ${
-        normalizeCuenta(selected) === CUENTA_1
-          ? "selected"
-          : ""
-      }
-    >
-      Empresa 1
-    </option>
-
-    <option
-      value="${CUENTA_2}"
-      ${
-        normalizeCuenta(selected) === CUENTA_2
-          ? "selected"
-          : ""
-      }
-    >
-      Empresa 2
-    </option>
-  `;
-}
-
-/* =========================================================
    PDF
    ========================================================= */
 
-function printMonth(mRaw, t) {
-  const m = normalizeMonth(mRaw);
+function printMonth(rawMonth, t) {
+  const m = normalizeMonth(rawMonth);
 
   const fecha =
     new Date().toLocaleDateString(
@@ -2034,225 +2198,135 @@ function printMonth(mRaw, t) {
       {
         day: "numeric",
         month: "long",
-        year: "numeric",
+        year: "numeric"
       }
     );
 
   const resumenRows = [
     [
-      "Saldo inicial Empresa 1",
-      eur(m.saldoInicial || 0),
-    ],
-
-    [
-      "Saldo inicial Empresa 2",
-      eur(m.saldoInicialCuenta2 || 0),
-    ],
-
-    [
-      "Ingresos efectuados",
-      eur(t.ingCobrados),
+      "Ingresos cobrados",
+      eur(t.ingCobrados)
     ],
 
     [
       "Ingresos pendientes",
-      eur(t.ingPendientes),
+      eur(t.ingPendientes)
     ],
 
     [
       "Facturación total",
-      eur(t.facturacionTotal),
+      eur(t.facturacionTotal)
     ],
 
     [
-      "Gastos realizados",
-      eur(t.gasPagados),
+      "Gastos pagados",
+      eur(t.gasPagados)
     ],
 
     [
       "Gastos pendientes",
-      eur(t.gasPendientes),
+      eur(t.gasPendientes)
     ],
 
     [
       "Total gastos",
-      eur(t.totalGastos),
+      eur(t.totalGastos)
     ],
 
     [
       "Beneficio neto",
       eur(t.beneficioNeto),
-      true,
+      true
     ],
 
     [
-      "Saldo calculado Empresa 1",
-      eur(t.saldoCalculadoCuenta1),
-      true,
+      "Caja total calculada",
+      eur(t.cajaTotalCalculada),
+      true
     ],
 
     [
-      "Saldo calculado Empresa 2",
-      eur(t.saldoCalculadoCuenta2),
-      true,
+      config.cuentas?.empresa1 || "Cuenta Empresa 1",
+      eur(t.accounts.empresa1.saldoCalculado)
     ],
 
     [
-      "Total en cuentas empresa",
-      eur(t.saldoCalculadoEmpresa),
-      true,
-    ],
-
-    [
-      "Retiradas CEO",
-      eur(t.retiradasCEO),
-    ],
-
-    [
-      "Aportaciones CEO",
-      eur(t.aportacionesCEO),
-    ],
-
-    [
-      "Dinero fuera de empresa",
-      eur(t.dineroFueraEmpresa),
-      true,
-    ],
-
-    [
-      "Patrimonio líquido empresarial",
-      eur(t.patrimonioLiquidoEmpresa),
-      true,
-    ],
-
-    ...(t.saldoRealCuenta1 !== null
-      ? [
-          [
-            "Saldo real Empresa 1",
-            eur(t.saldoRealCuenta1),
-          ],
-
-          [
-            "Diferencia Empresa 1",
-            eur(t.diferenciaCuenta1),
-            true,
-          ],
-        ]
-      : []),
-
-    ...(t.saldoRealCuenta2 !== null
-      ? [
-          [
-            "Saldo real Empresa 2",
-            eur(t.saldoRealCuenta2),
-          ],
-
-          [
-            "Diferencia Empresa 2",
-            eur(t.diferenciaCuenta2),
-            true,
-          ],
-        ]
-      : []),
-
-    ...(t.saldoRealTotal !== null
-      ? [
-          [
-            "Saldo real total empresa",
-            eur(t.saldoRealTotal),
-          ],
-
-          [
-            "Diferencia bancaria total",
-            eur(t.diferenciaTotal),
-            true,
-          ],
-        ]
-      : []),
+      config.cuentas?.empresa2 || "Cuenta Empresa 2",
+      eur(t.accounts.empresa2.saldoCalculado)
+    ]
   ];
 
   const ingresosBody =
-    m.ingresos
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.cliente || ""}</td>
-            <td>${r.concepto || ""}</td>
-            <td>${eur(r.importe)}</td>
-            <td>${cuentaLabel(r.cuenta)}</td>
-            <td>${r.cobrado || ""}</td>
-          </tr>
-        `
-      )
+    (m.ingresos || [])
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.cliente)}</td>
+          <td>${escapeHtml(r.concepto)}</td>
+          <td>${eur(r.importe)}</td>
+          <td>${escapeHtml(r.cobrado)}</td>
+          <td>${escapeHtml(
+            config.cuentas?.[r.cuenta] ||
+            ACCOUNT_NAMES[r.cuenta] ||
+            ""
+          )}</td>
+        </tr>
+      `)
       .join("") ||
     `<tr><td colspan="5">Sin datos</td></tr>`;
 
   const gastosBody =
-    m.gastos
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.concepto || ""}</td>
-            <td>${r.categoria || ""}</td>
-            <td>${eur(r.importe)}</td>
-            <td>${cuentaLabel(r.cuenta)}</td>
-            <td>${r.estado || ""}</td>
-          </tr>
-        `
-      )
+    (m.gastos || [])
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.concepto)}</td>
+          <td>${escapeHtml(r.categoria)}</td>
+          <td>${eur(r.importe)}</td>
+          <td>${escapeHtml(r.estado)}</td>
+          <td>${escapeHtml(
+            config.cuentas?.[r.cuenta] ||
+            ACCOUNT_NAMES[r.cuenta] ||
+            ""
+          )}</td>
+        </tr>
+      `)
       .join("") ||
     `<tr><td colspan="5">Sin datos</td></tr>`;
 
-  const retiradasBody =
-    m.retiradasCEO
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.concepto || ""}</td>
-            <td>${eur(r.importe)}</td>
-            <td>${r.fecha || ""}</td>
-            <td>${r.notas || ""}</td>
-          </tr>
-        `
-      )
+  const movimientosBody =
+    (m.movimientosCuenta || [])
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.fecha)}</td>
+          <td>${escapeHtml(r.tipo)}</td>
+          <td>${escapeHtml(
+            config.cuentas?.[r.cuenta] ||
+            ACCOUNT_NAMES[r.cuenta] ||
+            ""
+          )}</td>
+          <td>${escapeHtml(r.concepto)}</td>
+          <td>${eur(r.importe)}</td>
+        </tr>
+      `)
       .join("") ||
-    `<tr><td colspan="4">Sin datos</td></tr>`;
-
-  const aportacionesBody =
-    m.aportacionesCEO
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.concepto || ""}</td>
-            <td>${eur(r.importe)}</td>
-            <td>${r.fecha || ""}</td>
-            <td>${r.notas || ""}</td>
-          </tr>
-        `
-      )
-      .join("") ||
-    `<tr><td colspan="4">Sin datos</td></tr>`;
+    `<tr><td colspan="5">Sin movimientos</td></tr>`;
 
   const facturasBody =
-    m.facturas
-      .map(
-        (r) => `
-          <tr>
-            <td>${r.factura || ""}</td>
-            <td>${r.emisor || ""}</td>
-            <td>${r.concepto || ""}</td>
-            <td>${eur(r.importe)}</td>
-          </tr>
-        `
-      )
+    (m.facturas || [])
+      .map((r) => `
+        <tr>
+          <td>${escapeHtml(r.factura)}</td>
+          <td>${escapeHtml(r.emisor)}</td>
+          <td>${escapeHtml(r.concepto)}</td>
+          <td>${eur(r.importe)}</td>
+        </tr>
+      `)
       .join("") ||
     `<tr><td colspan="4">Sin datos</td></tr>`;
 
-  document.getElementById(
-    "print-area"
-  ).innerHTML = `
+  document.getElementById("print-area").innerHTML = `
+
     <div class="print-title">
-      Finanzas — ${m.nombre}
+      Finanzas — ${escapeHtml(m.nombre)}
     </div>
 
     <div class="print-sub">
@@ -2260,7 +2334,7 @@ function printMonth(mRaw, t) {
     </div>
 
     <div class="print-section-title">
-      Resumen del mes
+      Resultado económico
     </div>
 
     <div class="print-resumen">
@@ -2277,7 +2351,7 @@ function printMonth(mRaw, t) {
     </div>
 
     <div class="print-section-title">
-      Ingresos (${m.ingresos.length})
+      Ingresos (${(m.ingresos || []).length})
     </div>
 
     <table class="print-table">
@@ -2287,8 +2361,8 @@ function printMonth(mRaw, t) {
           <th>Cliente</th>
           <th>Concepto</th>
           <th>Importe</th>
-          <th>Cuenta</th>
           <th>Cobrado</th>
+          <th>Cuenta</th>
         </tr>
       </thead>
 
@@ -2299,7 +2373,7 @@ function printMonth(mRaw, t) {
     </table>
 
     <div class="print-section-title">
-      Gastos (${m.gastos.length})
+      Gastos (${(m.gastos || []).length})
     </div>
 
     <table class="print-table">
@@ -2309,8 +2383,8 @@ function printMonth(mRaw, t) {
           <th>Concepto</th>
           <th>Categoría</th>
           <th>Importe</th>
-          <th>Cuenta</th>
           <th>Estado</th>
+          <th>Cuenta</th>
         </tr>
       </thead>
 
@@ -2321,49 +2395,29 @@ function printMonth(mRaw, t) {
     </table>
 
     <div class="print-section-title">
-      Retiradas del CEO (${m.retiradasCEO.length})
+      Movimientos de cuenta / CEO
     </div>
 
     <table class="print-table">
 
       <thead>
         <tr>
+          <th>Fecha</th>
+          <th>Tipo</th>
+          <th>Cuenta</th>
           <th>Concepto</th>
           <th>Importe</th>
-          <th>Fecha</th>
-          <th>Notas</th>
         </tr>
       </thead>
 
       <tbody>
-        ${retiradasBody}
+        ${movimientosBody}
       </tbody>
 
     </table>
 
     <div class="print-section-title">
-      Aportaciones del CEO (${m.aportacionesCEO.length})
-    </div>
-
-    <table class="print-table">
-
-      <thead>
-        <tr>
-          <th>Concepto</th>
-          <th>Importe</th>
-          <th>Fecha</th>
-          <th>Notas</th>
-        </tr>
-      </thead>
-
-      <tbody>
-        ${aportacionesBody}
-      </tbody>
-
-    </table>
-
-    <div class="print-section-title">
-      Facturas recibidas (${m.facturas.length})
+      Facturas recibidas (${(m.facturas || []).length})
       — total: ${eur(t.totalFacturasRecibidas)}
     </div>
 
@@ -2392,17 +2446,32 @@ function printMonth(mRaw, t) {
    MES
    ========================================================= */
 
-function renderMonth(mRaw) {
-  const m = normalizeMonth(mRaw);
+function renderMonth(rawMonth) {
+  const m = normalizeMonth(rawMonth);
   const t = computeTotals(m);
 
   const main =
-    document.getElementById(
-      "main-content"
-    );
+    document.getElementById("main-content");
+
+  const accountOptions = (selected) =>
+    ACCOUNT_IDS
+      .map(
+        (id) => `
+          <option
+            value="${id}"
+            ${selected === id ? "selected" : ""}
+          >
+            ${escapeHtml(
+              config.cuentas?.[id] ||
+              ACCOUNT_NAMES[id]
+            )}
+          </option>
+        `
+      )
+      .join("");
 
   const ingresosRows =
-    m.ingresos
+    (m.ingresos || [])
       .map(
         (r, i) => `
           <tr>
@@ -2412,7 +2481,7 @@ function renderMonth(mRaw) {
                 data-arr="ingresos"
                 data-i="${i}"
                 data-f="cliente"
-                value="${r.cliente || ""}"
+                value="${escapeHtml(r.cliente)}"
               >
             </td>
 
@@ -2421,7 +2490,7 @@ function renderMonth(mRaw) {
                 data-arr="ingresos"
                 data-i="${i}"
                 data-f="concepto"
-                value="${r.concepto || ""}"
+                value="${escapeHtml(r.concepto)}"
               >
             </td>
 
@@ -2438,44 +2507,35 @@ function renderMonth(mRaw) {
 
             <td>
               <select
-                data-arr="ingresos"
-                data-i="${i}"
-                data-f="cuenta"
-              >
-                ${cuentaOptions(r.cuenta)}
-              </select>
-            </td>
-
-            <td>
-              <select
                 class="${estadoClass(r.cobrado)}"
                 data-arr="ingresos"
                 data-i="${i}"
                 data-f="cobrado"
               >
-
                 <option
                   value="Sí"
-                  ${
-                    r.cobrado === "Sí"
-                      ? "selected"
-                      : ""
-                  }
+                  ${r.cobrado === "Sí" ? "selected" : ""}
                 >
                   Sí
                 </option>
 
                 <option
                   value="No"
-                  ${
-                    r.cobrado === "No"
-                      ? "selected"
-                      : ""
-                  }
+                  ${r.cobrado === "No" ? "selected" : ""}
                 >
                   No
                 </option>
+              </select>
+            </td>
 
+            <td>
+              <select
+                class="account-select"
+                data-arr="ingresos"
+                data-i="${i}"
+                data-f="cuenta"
+              >
+                ${accountOptions(r.cuenta)}
               </select>
             </td>
 
@@ -2495,14 +2555,16 @@ function renderMonth(mRaw) {
       .join("");
 
   const gastosRows =
-    m.gastos
+    (m.gastos || [])
       .map((r, i) => {
-        const catOptions = [
-          ...(config.categoriasGastos || []),
-          ...(r.categoria
-            ? [r.categoria]
-            : []),
-        ];
+
+        const catOptions =
+          [
+            ...(config.categoriasGastos || []),
+            ...(r.categoria
+              ? [r.categoria]
+              : [])
+          ];
 
         return `
           <tr>
@@ -2512,7 +2574,7 @@ function renderMonth(mRaw) {
                 data-arr="gastos"
                 data-i="${i}"
                 data-f="concepto"
-                value="${r.concepto || ""}"
+                value="${escapeHtml(r.concepto)}"
               >
             </td>
 
@@ -2525,33 +2587,21 @@ function renderMonth(mRaw) {
 
                 <option
                   value=""
-                  ${
-                    !r.categoria
-                      ? "selected"
-                      : ""
-                  }
+                  ${!r.categoria ? "selected" : ""}
                 >
                   —
                 </option>
 
                 ${[
-                  ...new Set(catOptions),
-                ]
-                  .map(
-                    (c) => `
-                      <option
-                        value="${c}"
-                        ${
-                          r.categoria === c
-                            ? "selected"
-                            : ""
-                        }
-                      >
-                        ${c}
-                      </option>
-                    `
-                  )
-                  .join("")}
+                  ...new Set(catOptions)
+                ].map((c) => `
+                  <option
+                    value="${escapeHtml(c)}"
+                    ${r.categoria === c ? "selected" : ""}
+                  >
+                    ${escapeHtml(c)}
+                  </option>
+                `).join("")}
 
               </select>
             </td>
@@ -2569,16 +2619,6 @@ function renderMonth(mRaw) {
 
             <td>
               <select
-                data-arr="gastos"
-                data-i="${i}"
-                data-f="cuenta"
-              >
-                ${cuentaOptions(r.cuenta)}
-              </select>
-            </td>
-
-            <td>
-              <select
                 class="${estadoClass(r.estado)}"
                 data-arr="gastos"
                 data-i="${i}"
@@ -2587,27 +2627,29 @@ function renderMonth(mRaw) {
 
                 <option
                   value="Pagado"
-                  ${
-                    r.estado === "Pagado"
-                      ? "selected"
-                      : ""
-                  }
+                  ${r.estado === "Pagado" ? "selected" : ""}
                 >
                   Pagado
                 </option>
 
                 <option
                   value="Pendiente"
-                  ${
-                    r.estado ===
-                    "Pendiente"
-                      ? "selected"
-                      : ""
-                  }
+                  ${r.estado === "Pendiente" ? "selected" : ""}
                 >
                   Pendiente
                 </option>
 
+              </select>
+            </td>
+
+            <td>
+              <select
+                class="account-select"
+                data-arr="gastos"
+                data-i="${i}"
+                data-f="cuenta"
+              >
+                ${accountOptions(r.cuenta)}
               </select>
             </td>
 
@@ -2627,7 +2669,7 @@ function renderMonth(mRaw) {
       .join("");
 
   const facturasRows =
-    m.facturas
+    (m.facturas || [])
       .map(
         (r, i) => `
           <tr>
@@ -2637,7 +2679,7 @@ function renderMonth(mRaw) {
                 data-arr="facturas"
                 data-i="${i}"
                 data-f="factura"
-                value="${r.factura || ""}"
+                value="${escapeHtml(r.factura)}"
               >
             </td>
 
@@ -2646,7 +2688,7 @@ function renderMonth(mRaw) {
                 data-arr="facturas"
                 data-i="${i}"
                 data-f="emisor"
-                value="${r.emisor || ""}"
+                value="${escapeHtml(r.emisor)}"
               >
             </td>
 
@@ -2655,7 +2697,7 @@ function renderMonth(mRaw) {
                 data-arr="facturas"
                 data-i="${i}"
                 data-f="concepto"
-                value="${r.concepto || ""}"
+                value="${escapeHtml(r.concepto)}"
               >
             </td>
 
@@ -2675,7 +2717,7 @@ function renderMonth(mRaw) {
                 data-arr="facturas"
                 data-i="${i}"
                 data-f="notas"
-                value="${r.notas || ""}"
+                value="${escapeHtml(r.notas)}"
               >
             </td>
 
@@ -2694,130 +2736,11 @@ function renderMonth(mRaw) {
       )
       .join("");
 
-  const retiradasRows =
-    m.retiradasCEO
-      .map(
-        (r, i) => `
-          <tr>
-
-            <td>
-              <input
-                data-arr="retiradasCEO"
-                data-i="${i}"
-                data-f="concepto"
-                value="${r.concepto || ""}"
-              >
-            </td>
-
-            <td>
-              <input
-                type="number"
-                step="0.01"
-                data-arr="retiradasCEO"
-                data-i="${i}"
-                data-f="importe"
-                value="${r.importe || 0}"
-              >
-            </td>
-
-            <td>
-              <input
-                type="date"
-                data-arr="retiradasCEO"
-                data-i="${i}"
-                data-f="fecha"
-                value="${r.fecha || ""}"
-              >
-            </td>
-
-            <td>
-              <input
-                data-arr="retiradasCEO"
-                data-i="${i}"
-                data-f="notas"
-                value="${r.notas || ""}"
-              >
-            </td>
-
-            <td>
-              <button
-                class="btn-del"
-                data-del="retiradasCEO"
-                data-i="${i}"
-              >
-                ✕
-              </button>
-            </td>
-
-          </tr>
-        `
-      )
-      .join("");
-
-  const aportacionesRows =
-    m.aportacionesCEO
-      .map(
-        (r, i) => `
-          <tr>
-
-            <td>
-              <input
-                data-arr="aportacionesCEO"
-                data-i="${i}"
-                data-f="concepto"
-                value="${r.concepto || ""}"
-              >
-            </td>
-
-            <td>
-              <input
-                type="number"
-                step="0.01"
-                data-arr="aportacionesCEO"
-                data-i="${i}"
-                data-f="importe"
-                value="${r.importe || 0}"
-              >
-            </td>
-
-            <td>
-              <input
-                type="date"
-                data-arr="aportacionesCEO"
-                data-i="${i}"
-                data-f="fecha"
-                value="${r.fecha || ""}"
-              >
-            </td>
-
-            <td>
-              <input
-                data-arr="aportacionesCEO"
-                data-i="${i}"
-                data-f="notas"
-                value="${r.notas || ""}"
-              >
-            </td>
-
-            <td>
-              <button
-                class="btn-del"
-                data-del="aportacionesCEO"
-                data-i="${i}"
-              >
-                ✕
-              </button>
-            </td>
-
-          </tr>
-        `
-      )
-      .join("");
-
   main.innerHTML = `
+
     <div class="month-header">
 
-      <h2>${m.nombre}</h2>
+      <h2>${escapeHtml(m.nombre)}</h2>
 
       ${
         months.length > 1
@@ -2864,676 +2787,147 @@ function renderMonth(mRaw) {
 
     </div>
 
-    <!-- =====================================================
-         RESUMEN GENERAL
-         ===================================================== -->
-
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:12px;"
-      >
-        Resumen del mes
+      <h3 class="section-title"
+          style="margin-bottom:12px;">
+        Resultado económico
       </h3>
 
       <div class="resumen-grid">
 
         <div class="resumen-item">
-          <div class="lbl">
-            Saldo inicial Empresa 1
-          </div>
-
-          <input
-            type="number"
-            step="0.01"
-            id="f-saldoInicial"
-            value="${m.saldoInicial || 0}"
-          >
-        </div>
-
-        <div class="resumen-item">
-          <div class="lbl">
-            Saldo inicial Empresa 2
-          </div>
-
-          <input
-            type="number"
-            step="0.01"
-            id="f-saldoInicialCuenta2"
-            value="${m.saldoInicialCuenta2 || 0}"
-          >
-        </div>
-
-        <div class="resumen-item">
-          <div class="lbl">
-            Ingresos efectuados
-          </div>
-
+          <div class="lbl">Ingresos cobrados</div>
           <div class="val tone-good">
             ${eur(t.ingCobrados)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Ingresos pendientes
-          </div>
-
+          <div class="lbl">Ingresos pendientes</div>
           <div class="val tone-warn">
             ${eur(t.ingPendientes)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Facturación total
-          </div>
-
+          <div class="lbl">Facturación total</div>
           <div class="val">
             ${eur(t.facturacionTotal)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Gastos realizados
-          </div>
-
+          <div class="lbl">Gastos realizados</div>
           <div class="val tone-bad">
             ${eur(t.gasPagados)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Gastos pendientes
-          </div>
-
+          <div class="lbl">Gastos pendientes</div>
           <div class="val tone-warn">
             ${eur(t.gasPendientes)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Total gastos
-          </div>
-
+          <div class="lbl">Total gastos</div>
           <div class="val">
             ${eur(t.totalGastos)}
           </div>
         </div>
 
         <div class="resumen-item">
-          <div class="lbl">
-            Beneficio neto
-          </div>
-
-          <div
-            class="val ${
-              t.beneficioNeto >= 0
-                ? "tone-good"
-                : "tone-bad"
-            }"
-          >
+          <div class="lbl">Beneficio neto</div>
+          <div class="val ${
+            t.beneficioNeto >= 0
+              ? "tone-good"
+              : "tone-bad"
+          }">
             <strong>
               ${eur(t.beneficioNeto)}
             </strong>
           </div>
         </div>
 
+        <div class="resumen-item">
+          <div class="lbl">Caja total calculada</div>
+          <div class="val">
+            <strong>
+              ${eur(t.cajaTotalCalculada)}
+            </strong>
+          </div>
+        </div>
+
       </div>
 
-      <p
-        class="config-hint"
-        style="margin-top:12px;"
-      >
+      <p class="config-hint"
+         style="margin-top:12px;">
+
         <strong>Beneficio neto</strong> =
         ingresos cobrados − gastos pagados.
-        Las transferencias entre Empresa 1,
-        el CEO y Empresa 2 no afectan al beneficio.
+
+        <br><br>
+
+        <strong>Caja</strong> =
+        saldos iniciales + ingresos cobrados
+        − gastos pagados ± movimientos de caja.
+
+        <br><br>
+
+        Las retiradas y aportaciones del CEO
+        <strong>no son gastos ni ingresos</strong>.
       </p>
 
     </div>
-
-    <!-- =====================================================
-         SITUACIÓN DE CUENTAS
-         ===================================================== -->
 
     <div class="card card-pad">
 
-      <h3
-        class="section-title"
-        style="margin-bottom:12px;"
-      >
-        Situación de las cuentas de empresa
+      <h3 class="section-title"
+          style="margin-bottom:12px;">
+        Resumen de cuentas
       </h3>
 
-      <div class="resumen-grid">
+      <div class="account-grid">
 
-        <div class="resumen-item">
+        ${renderAccountCard(
+          m,
+          t,
+          "empresa1"
+        )}
 
-          <div class="lbl">
-            Saldo calculado Empresa 1
-          </div>
-
-          <div class="val">
-            <strong>
-              ${eur(t.saldoCalculadoCuenta1)}
-            </strong>
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Saldo calculado Empresa 2
-          </div>
-
-          <div class="val">
-            <strong>
-              ${eur(t.saldoCalculadoCuenta2)}
-            </strong>
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Total en cuentas empresa
-          </div>
-
-          <div class="val">
-            <strong>
-              ${eur(t.saldoCalculadoEmpresa)}
-            </strong>
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Retiradas del CEO
-          </div>
-
-          <div class="val tone-warn">
-            ${eur(t.retiradasCEO)}
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Aportaciones del CEO
-          </div>
-
-          <div class="val tone-good">
-            ${eur(t.aportacionesCEO)}
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Dinero fuera de empresa
-          </div>
-
-          <div class="val ${
-            t.dineroFueraEmpresa > 0
-              ? "tone-warn"
-              : t.dineroFueraEmpresa < 0
-              ? "tone-good"
-              : ""
-          }">
-
-            <strong>
-              ${eur(t.dineroFueraEmpresa)}
-            </strong>
-
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Patrimonio líquido empresarial
-          </div>
-
-          <div class="val">
-
-            <strong>
-              ${eur(
-                t.patrimonioLiquidoEmpresa
-              )}
-            </strong>
-
-          </div>
-
-        </div>
+        ${renderAccountCard(
+          m,
+          t,
+          "empresa2"
+        )}
 
       </div>
 
-      <p
-        class="config-hint"
-        style="margin-top:12px;"
-      >
-        <strong>Dinero fuera de empresa</strong> =
-        retiradas del CEO − aportaciones posteriores.
-        No se considera gasto empresarial.
-      </p>
-
-    </div>
-
-    <!-- =====================================================
-         CONCILIACIÓN BANCARIA
-         ===================================================== -->
-
-    <div class="card card-pad">
-
-      <h3
-        class="section-title"
-        style="margin-bottom:4px;"
-      >
-        Conciliación bancaria
-      </h3>
-
-      <p
-        class="config-hint"
-        style="margin-top:0;margin-bottom:12px;"
-      >
-        Introduce el saldo que aparece realmente
-        en cada cuenta bancaria. El programa lo
-        comparará con el saldo calculado de cada
-        cuenta.
-      </p>
-
-      <div class="resumen-grid">
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Saldo real Empresa 1
-          </div>
-
-          <input
-            type="number"
-            step="0.01"
-            id="f-saldoReal"
-            value="${
-              m.saldoRealCuenta ??
-              ""
-            }"
-            placeholder="Sin comprobar"
-          >
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Saldo real Empresa 2
-          </div>
-
-          <input
-            type="number"
-            step="0.01"
-            id="f-saldoRealCuenta2"
-            value="${
-              m.saldoRealCuenta2 ??
-              ""
-            }"
-            placeholder="Sin comprobar"
-          >
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Total calculado
-          </div>
-
-          <div class="val">
-            ${eur(
-              t.saldoCalculadoEmpresa
-            )}
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Total real en bancos
-          </div>
-
-          <div class="val">
-            ${
-              t.saldoRealTotal === null
-                ? "—"
-                : eur(t.saldoRealTotal)
-            }
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Diferencia Empresa 1
-          </div>
-
-          <div
-            class="val ${
-              t.diferenciaCuenta1 ===
-              null
-                ? ""
-                : Math.abs(
-                    t.diferenciaCuenta1
-                  ) < 1
-                ? "tone-good"
-                : "tone-bad"
-            }"
-          >
-            <strong>
-              ${
-                t.diferenciaCuenta1 ===
-                null
-                  ? "—"
-                  : eur(
-                      t.diferenciaCuenta1
-                    )
-              }
-            </strong>
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Diferencia Empresa 2
-          </div>
-
-          <div
-            class="val ${
-              t.diferenciaCuenta2 ===
-              null
-                ? ""
-                : Math.abs(
-                    t.diferenciaCuenta2
-                  ) < 1
-                ? "tone-good"
-                : "tone-bad"
-            }"
-          >
-            <strong>
-              ${
-                t.diferenciaCuenta2 ===
-                null
-                  ? "—"
-                  : eur(
-                      t.diferenciaCuenta2
-                    )
-              }
-            </strong>
-          </div>
-
-        </div>
-
-        <div class="resumen-item">
-
-          <div class="lbl">
-            Diferencia bancaria total
-          </div>
-
-          <div
-            class="val ${
-              t.diferenciaTotal === null
-                ? ""
-                : Math.abs(
-                    t.diferenciaTotal
-                  ) < 1
-                ? "tone-good"
-                : "tone-bad"
-            }"
-          >
-
-            <strong>
-              ${
-                t.diferenciaTotal === null
-                  ? "—"
-                  : eur(
-                      t.diferenciaTotal
-                    )
-              }
-            </strong>
-
-          </div>
-
-        </div>
-
+      <div style="margin-top:14px;">
+        <button
+          class="btn-add"
+          id="btn-open-cuentas"
+        >
+          🏦 Gestionar cuentas y movimientos
+        </button>
       </div>
 
-      ${
-        t.diferenciaTotal !== null &&
-        Math.abs(t.diferenciaTotal) >= 1
-          ? `
-            <p
-              class="config-hint"
-              style="margin-top:10px;"
-            >
-              ${
-                t.diferenciaTotal > 0
-                  ? "Hay más dinero en las cuentas bancarias de empresa del que el cálculo espera. Revisa ingresos cobrados, gastos pagados o movimientos bancarios que todavía no estén registrados."
-                  : "Hay menos dinero en las cuentas bancarias de empresa del que el cálculo espera. Revisa gastos pagados, retiradas del CEO o movimientos que todavía no estén registrados."
-              }
-            </p>
-          `
-          : ""
-      }
-
     </div>
-
-    <!-- =====================================================
-         RETIRADAS CEO
-         ===================================================== -->
 
     <div class="card">
 
       <div class="section-header">
 
         <div>
-
-          <span class="section-title">
-            Dinero retirado por el CEO
-          </span>
-
-          <span class="section-count">
-            ${m.retiradasCEO.length}
-          </span>
-
-        </div>
-
-        <button
-          class="btn-add"
-          data-add="retiradasCEO"
-        >
-          + Añadir
-        </button>
-
-      </div>
-
-      <p
-        class="config-hint"
-        style="padding:8px 16px 0;"
-      >
-        Registra aquí el dinero que sale de
-        Empresa 1 hacia la cuenta personal del CEO.
-        No se considera gasto.
-      </p>
-
-      <div class="table-scroll">
-
-        <table>
-
-          <thead>
-
-            <tr>
-              <th>Concepto</th>
-              <th>Importe</th>
-              <th>Fecha</th>
-              <th>Notas</th>
-              <th></th>
-            </tr>
-
-          </thead>
-
-          <tbody>
-            ${
-              retiradasRows ||
-              `
-                <tr>
-                  <td
-                    colspan="5"
-                    class="config-hint"
-                  >
-                    No hay retiradas registradas.
-                  </td>
-                </tr>
-              `
-            }
-          </tbody>
-
-        </table>
-
-      </div>
-
-      <div class="section-footer">
-
-        <button
-          class="btn-add"
-          data-add="retiradasCEO"
-        >
-          + Añadir
-        </button>
-
-      </div>
-
-    </div>
-
-    <!-- =====================================================
-         APORTACIONES CEO
-         ===================================================== -->
-
-    <div class="card">
-
-      <div class="section-header">
-
-        <div>
-
-          <span class="section-title">
-            Dinero aportado por el CEO
-          </span>
-
-          <span class="section-count">
-            ${m.aportacionesCEO.length}
-          </span>
-
-        </div>
-
-        <button
-          class="btn-add"
-          data-add="aportacionesCEO"
-        >
-          + Añadir
-        </button>
-
-      </div>
-
-      <p
-        class="config-hint"
-        style="padding:8px 16px 0;"
-      >
-        Registra aquí el dinero que entra desde
-        la cuenta personal del CEO hacia Empresa 2.
-        No se considera ingreso.
-      </p>
-
-      <div class="table-scroll">
-
-        <table>
-
-          <thead>
-
-            <tr>
-              <th>Concepto</th>
-              <th>Importe</th>
-              <th>Fecha</th>
-              <th>Notas</th>
-              <th></th>
-            </tr>
-
-          </thead>
-
-          <tbody>
-            ${
-              aportacionesRows ||
-              `
-                <tr>
-                  <td
-                    colspan="5"
-                    class="config-hint"
-                  >
-                    No hay aportaciones registradas.
-                  </td>
-                </tr>
-              `
-            }
-          </tbody>
-
-        </table>
-
-      </div>
-
-      <div class="section-footer">
-
-        <button
-          class="btn-add"
-          data-add="aportacionesCEO"
-        >
-          + Añadir
-        </button>
-
-      </div>
-
-    </div>
-
-    <!-- =====================================================
-         INGRESOS
-         ===================================================== -->
-
-    <div class="card">
-
-      <div class="section-header">
-
-        <div>
-
           <span class="section-title">
             Ingresos
           </span>
 
           <span class="section-count">
-            ${m.ingresos.length}
+            ${(m.ingresos || []).length}
           </span>
-
         </div>
 
         <button
@@ -3550,16 +2944,14 @@ function renderMonth(mRaw) {
         <table>
 
           <thead>
-
             <tr>
               <th>Cliente</th>
               <th>Concepto</th>
               <th>Importe</th>
-              <th>Cuenta</th>
               <th>Cobrado</th>
+              <th>Cuenta</th>
               <th></th>
             </tr>
-
           </thead>
 
           <tbody>
@@ -3571,36 +2963,28 @@ function renderMonth(mRaw) {
       </div>
 
       <div class="section-footer">
-
         <button
           class="btn-add"
           data-add="ingresos"
         >
           + Añadir
         </button>
-
       </div>
 
     </div>
-
-    <!-- =====================================================
-         GASTOS
-         ===================================================== -->
 
     <div class="card">
 
       <div class="section-header">
 
         <div>
-
           <span class="section-title">
             Gastos
           </span>
 
           <span class="section-count">
-            ${m.gastos.length}
+            ${(m.gastos || []).length}
           </span>
-
         </div>
 
         <button
@@ -3617,16 +3001,14 @@ function renderMonth(mRaw) {
         <table>
 
           <thead>
-
             <tr>
               <th>Concepto</th>
               <th>Categoría</th>
               <th>Importe</th>
-              <th>Cuenta</th>
               <th>Estado</th>
+              <th>Cuenta</th>
               <th></th>
             </tr>
-
           </thead>
 
           <tbody>
@@ -3638,36 +3020,28 @@ function renderMonth(mRaw) {
       </div>
 
       <div class="section-footer">
-
         <button
           class="btn-add"
           data-add="gastos"
         >
           + Añadir
         </button>
-
       </div>
 
     </div>
-
-    <!-- =====================================================
-         FACTURAS
-         ===================================================== -->
 
     <div class="card">
 
       <div class="section-header">
 
         <div>
-
           <span class="section-title">
             Facturas recibidas
           </span>
 
           <span class="section-count">
-            ${m.facturas.length}
+            ${(m.facturas || []).length}
           </span>
-
         </div>
 
         <button
@@ -3679,13 +3053,10 @@ function renderMonth(mRaw) {
 
       </div>
 
-      <p
-        class="config-hint"
-        style="padding:8px 16px 0;"
-      >
-        Registro de facturas que recibes, para
-        cruzarlas manualmente con la tabla de Gastos.
-        No entra en el Resumen del mes.
+      <p class="config-hint"
+         style="padding:8px 16px 0;">
+        Registro de facturas recibidas.
+        No entra directamente en el Resumen del mes.
       </p>
 
       <div class="table-scroll">
@@ -3693,7 +3064,6 @@ function renderMonth(mRaw) {
         <table>
 
           <thead>
-
             <tr>
               <th>Factura</th>
               <th>Emisor</th>
@@ -3702,7 +3072,6 @@ function renderMonth(mRaw) {
               <th>Notas</th>
               <th></th>
             </tr>
-
           </thead>
 
           <tbody>
@@ -3729,7 +3098,7 @@ function renderMonth(mRaw) {
           class="config-hint"
           style="margin:0;"
         >
-          Total facturas recibidas:
+          Total facturas:
           <strong>
             ${eur(t.totalFacturasRecibidas)}
           </strong>
@@ -3740,59 +3109,58 @@ function renderMonth(mRaw) {
     </div>
   `;
 
-  /* =========================================================
-     EVENTOS RESUMEN
-     ========================================================= */
+  /* ---------- botones de cuenta ---------- */
+
+  main
+    .querySelectorAll("[data-account-field]")
+    .forEach((el) => {
+
+      el.addEventListener(
+        "change",
+        async (e) => {
+
+          const accountId =
+            e.target.dataset.accountId;
+
+          const field =
+            e.target.dataset.accountField;
+
+          let value;
+
+          if (field === "saldoReal") {
+            value =
+              e.target.value === ""
+                ? null
+                : Number(e.target.value);
+          } else if (
+            field === "saldoInicial"
+          ) {
+            value =
+              Number(e.target.value) || 0;
+          } else {
+            value = e.target.value;
+          }
+
+          await saveAccountField(
+            m.id,
+            accountId,
+            field,
+            value
+          );
+        }
+      );
+    });
 
   document
-    .getElementById("f-saldoInicial")
-    .addEventListener("change", (e) =>
-      saveMonthField(
-        m.id,
-        "saldoInicial",
-        Number(e.target.value) || 0
-      )
-    );
+    .getElementById("btn-open-cuentas")
+    .addEventListener("click", () => {
 
-  document
-    .getElementById(
-      "f-saldoInicialCuenta2"
-    )
-    .addEventListener("change", (e) =>
-      saveMonthField(
-        m.id,
-        "saldoInicialCuenta2",
-        Number(e.target.value) || 0
-      )
-    );
+      cuentasMonthId = m.id;
+      currentView = "cuentas";
+      render();
+    });
 
-  document
-    .getElementById("f-saldoReal")
-    .addEventListener("change", (e) =>
-      saveMonthField(
-        m.id,
-        "saldoRealCuenta",
-        e.target.value === ""
-          ? null
-          : Number(e.target.value)
-      )
-    );
-
-  document
-    .getElementById("f-saldoRealCuenta2")
-    .addEventListener("change", (e) =>
-      saveMonthField(
-        m.id,
-        "saldoRealCuenta2",
-        e.target.value === ""
-          ? null
-          : Number(e.target.value)
-      )
-    );
-
-  /* =========================================================
-     ELIMINAR MES
-     ========================================================= */
+  /* ---------- eliminar mes ---------- */
 
   const delMonthBtn =
     document.getElementById(
@@ -3800,62 +3168,61 @@ function renderMonth(mRaw) {
     );
 
   if (delMonthBtn) {
+
     delMonthBtn.addEventListener(
       "click",
       async () => {
+
         if (
           confirm(
             `¿Eliminar "${m.nombre}"? Esta acción no se puede deshacer.`
           )
         ) {
+
           await removeMonth(m.id);
-          currentView = "dashboard";
+
+          currentView =
+            "dashboard";
         }
       }
     );
   }
 
-  /* =========================================================
-     EDITAR ARRAYS
-     ========================================================= */
+  /* ---------- edición de ingresos/gastos/facturas ---------- */
 
   main
     .querySelectorAll("[data-arr]")
     .forEach((el) => {
+
       el.addEventListener(
         "change",
         async (e) => {
+
           const arr =
             e.target.dataset.arr;
 
-          const i = Number(
-            e.target.dataset.i
-          );
+          const i =
+            Number(e.target.dataset.i);
 
           const f =
             e.target.dataset.f;
 
-          const newArr = [
-            ...(m[arr] || []),
-          ];
+          const newArr =
+            [...(m[arr] || [])];
 
-          let value;
+          let value =
+            e.target.value;
 
           if (
             e.target.type === "number"
           ) {
             value =
-              Number(
-                e.target.value
-              ) || 0;
-          } else {
-            value =
-              e.target.value;
+              Number(e.target.value) || 0;
           }
 
           newArr[i] = {
             ...newArr[i],
-            [f]: value,
+            [f]: value
           };
 
           await saveMonthField(
@@ -3867,101 +3234,77 @@ function renderMonth(mRaw) {
       );
     });
 
-  /* =========================================================
-     AÑADIR MOVIMIENTOS
-     ========================================================= */
+  /* ---------- añadir ---------- */
 
   main
     .querySelectorAll("[data-add]")
     .forEach((el) => {
+
       el.addEventListener(
         "click",
         async () => {
+
           const arr =
             el.dataset.add;
 
-          let blank;
-
-          if (arr === "ingresos") {
-            blank = {
-              cliente: "",
-              concepto: "",
-              importe: 0,
-              cobrado: "No",
-              cuenta: CUENTA_1,
-            };
-          } else if (
-            arr === "gastos"
-          ) {
-            blank = {
-              concepto: "",
-              categoria: "",
-              importe: 0,
-              estado: "Pendiente",
-              cuenta: CUENTA_1,
-            };
-          } else if (
-            arr === "retiradasCEO"
-          ) {
-            blank = {
-              concepto: "",
-              importe: 0,
-              fecha: "",
-              notas: "",
-            };
-          } else if (
-            arr === "aportacionesCEO"
-          ) {
-            blank = {
-              concepto: "",
-              importe: 0,
-              fecha: "",
-              notas: "",
-            };
-          } else {
-            blank = {
-              factura: "",
-              emisor: "",
-              concepto: "",
-              importe: 0,
-              notas: "",
-            };
-          }
+          const blank =
+            arr === "ingresos"
+              ? {
+                  cliente: "",
+                  concepto: "",
+                  importe: 0,
+                  cobrado: "No",
+                  cuenta: "empresa1"
+                }
+              : arr === "gastos"
+                ? {
+                    concepto: "",
+                    categoria: "",
+                    importe: 0,
+                    estado: "Pendiente",
+                    cuenta: "empresa1"
+                  }
+                : {
+                    factura: "",
+                    emisor: "",
+                    concepto: "",
+                    importe: 0,
+                    notas: ""
+                  };
 
           await saveMonthField(
             m.id,
             arr,
             [
               ...(m[arr] || []),
-              blank,
+              blank
             ]
           );
         }
       );
     });
 
-  /* =========================================================
-     ELIMINAR MOVIMIENTOS
-     ========================================================= */
+  /* ---------- borrar ---------- */
 
   main
     .querySelectorAll("[data-del]")
     .forEach((el) => {
+
       el.addEventListener(
         "click",
         async () => {
+
           const arr =
             el.dataset.del;
 
-          const i = Number(
-            el.dataset.i
-          );
+          const i =
+            Number(el.dataset.i);
 
-          const newArr = (
-            m[arr] || []
-          ).filter(
-            (_, idx) => idx !== i
-          );
+          const newArr =
+            (m[arr] || [])
+              .filter(
+                (_, idx) => idx !== i
+              );
 
           await saveMonthField(
             m.id,
@@ -3982,22 +3325,21 @@ function render() {
 
   renderSidebar();
 
-  if (
-    currentView === "dashboard"
-  ) {
+  if (currentView === "dashboard") {
     renderDashboard();
-  } else if (
-    currentView === "informes"
-  ) {
+
+  } else if (currentView === "informes") {
     renderInformes();
-  } else if (
-    currentView === "beneficiarios"
-  ) {
+
+  } else if (currentView === "cuentas") {
+    renderCuentas();
+
+  } else if (currentView === "beneficiarios") {
     renderBeneficiarios();
-  } else if (
-    currentView === "config"
-  ) {
+
+  } else if (currentView === "config") {
     renderConfig();
+
   } else if (
     months.find(
       (m) => m.id === currentView
@@ -4008,8 +3350,11 @@ function render() {
         (m) => m.id === currentView
       )
     );
+
   } else {
-    currentView = "dashboard";
+    currentView =
+      "dashboard";
+
     renderDashboard();
   }
 }
@@ -4033,9 +3378,23 @@ document
   });
 
 document
+  .getElementById("nav-cuentas")
+  .addEventListener("click", () => {
+
+    if (!cuentasMonthId && months.length) {
+      cuentasMonthId =
+        months[months.length - 1].id;
+    }
+
+    currentView = "cuentas";
+    render();
+  });
+
+document
   .getElementById("nav-beneficiarios")
   .addEventListener("click", () => {
-    currentView = "beneficiarios";
+    currentView =
+      "beneficiarios";
     render();
   });
 
@@ -4053,6 +3412,7 @@ document
 document
   .getElementById("btn-pdf")
   .addEventListener("click", () => {
+
     if (!months.length) {
       alert(
         "Todavía no hay ningún mes con datos."
@@ -4066,8 +3426,10 @@ document
         (x) => x.id === currentView
       ) ||
       months.find(
-        (x) =>
-          x.id === informesMonthId
+        (x) => x.id === informesMonthId
+      ) ||
+      months.find(
+        (x) => x.id === cuentasMonthId
       ) ||
       months[months.length - 1];
 
@@ -4086,47 +3448,51 @@ document
   .addEventListener(
     "click",
     async () => {
-      const nombre = prompt(
-        "Nombre del nuevo mes (ej. Agosto 2026):"
-      );
+
+      const nombre =
+        prompt(
+          "Nombre del nuevo mes (ej. Agosto 2026):"
+        );
 
       if (!nombre) return;
 
       const last =
         months[months.length - 1];
 
-      let saldoInicial = 0;
-      let saldoInicialCuenta2 = 0;
+      let accountsIniciales = {
+        empresa1: 0,
+        empresa2: 0
+      };
 
+      /*
+       * MUY IMPORTANTE:
+       *
+       * El siguiente mes empieza con el saldo
+       * calculado de CADA cuenta por separado.
+       */
       if (last) {
-        const lastTotals =
+
+        const t =
           computeTotals(last);
 
-        /*
-         * El nuevo mes empieza con el saldo
-         * calculado de cada cuenta.
-         *
-         * NO trasladamos "dinero fuera de empresa"
-         * a una cuenta bancaria porque sigue estando
-         * fuera de las cuentas de empresa.
-         */
-        saldoInicial =
-          lastTotals.saldoCalculadoCuenta1;
+        accountsIniciales = {
+          empresa1:
+            t.accounts.empresa1.saldoCalculado,
 
-        saldoInicialCuenta2 =
-          lastTotals.saldoCalculadoCuenta2;
+          empresa2:
+            t.accounts.empresa2.saldoCalculado
+        };
       }
 
       await addMonth(
         nombre,
-        saldoInicial,
-        saldoInicialCuenta2
+        accountsIniciales
       );
     }
   );
 
 /* =========================================================
-   BOOTSTRAP
+   FIREBASE / BOOTSTRAP
    ========================================================= */
 
 let monthsReady = false;
@@ -4134,6 +3500,7 @@ let configReady = false;
 let beneficiariosReady = false;
 
 function maybeReady() {
+
   if (
     monthsReady &&
     configReady &&
@@ -4147,29 +3514,58 @@ function maybeReady() {
 onAuthStateChanged(
   auth,
   async (user) => {
+
     if (!user) return;
 
     const configSnap =
       await getDoc(configRef);
 
     if (!configSnap.exists()) {
+
       await setDoc(
         configRef,
         DEFAULT_CONFIG
       );
+
+    } else {
+
+      /*
+       * Si ya existe configuración antigua,
+       * añadimos únicamente la nueva propiedad
+       * "cuentas" sin borrar nada.
+       */
+      const existing =
+        configSnap.data();
+
+      if (!existing.cuentas) {
+
+        await updateDoc(
+          configRef,
+          {
+            cuentas:
+              DEFAULT_CONFIG.cuentas
+          }
+        );
+      }
     }
 
     onSnapshot(
       configRef,
       (snap) => {
-        config = snap.exists()
-          ? {
-              ...DEFAULT_CONFIG,
-              ...snap.data(),
-            }
-          : {
-              ...DEFAULT_CONFIG,
-            };
+
+        config =
+          snap.exists()
+            ? {
+                ...DEFAULT_CONFIG,
+                ...snap.data(),
+                cuentas: {
+                  ...DEFAULT_CONFIG.cuentas,
+                  ...(snap.data().cuentas || {})
+                }
+              }
+            : {
+                ...DEFAULT_CONFIG
+              };
 
         configReady = true;
 
@@ -4181,18 +3577,21 @@ onAuthStateChanged(
       }
     );
 
-    const q = query(
-      mesesRef,
-      orderBy("orden", "asc")
-    );
+    const q =
+      query(
+        mesesRef,
+        orderBy("orden", "asc")
+      );
 
     onSnapshot(
       q,
       async (snap) => {
+
         if (
           snap.empty &&
           !ready
         ) {
+
           await addDoc(
             mesesRef,
             seedMonth()
@@ -4202,12 +3601,12 @@ onAuthStateChanged(
         }
 
         months =
-          snap.docs.map((d) => ({
-            id: d.id,
-            ...normalizeMonth(
-              d.data()
-            ),
-          }));
+          snap.docs.map(
+            (d) => ({
+              id: d.id,
+              ...d.data()
+            })
+          );
 
         monthsReady = true;
 
@@ -4219,19 +3618,23 @@ onAuthStateChanged(
       }
     );
 
-    const qb = query(
-      beneficiariosRef,
-      orderBy("orden", "asc")
-    );
+    const qb =
+      query(
+        beneficiariosRef,
+        orderBy("orden", "asc")
+      );
 
     onSnapshot(
       qb,
       (snap) => {
+
         beneficiarios =
-          snap.docs.map((d) => ({
-            id: d.id,
-            ...d.data(),
-          }));
+          snap.docs.map(
+            (d) => ({
+              id: d.id,
+              ...d.data()
+            })
+          );
 
         beneficiariosReady = true;
 
@@ -4245,23 +3648,21 @@ onAuthStateChanged(
   }
 );
 
-/* =========================================================
-   AUTENTICACIÓN
-   ========================================================= */
+signInAnonymously(auth)
+  .catch((err) => {
 
-signInAnonymously(auth).catch(
-  (err) => {
     document.getElementById(
       "main-content"
     ).innerHTML = `
       <div class="card card-pad">
         Error al conectar con Firebase:
-        ${err.message}.
+        ${escapeHtml(err.message)}.
+
+        <br><br>
+
         Revisa
         <code>firebase-config.js</code>
-        y que la autenticación anónima
-        esté activada.
+        y que la autenticación anónima esté activada.
       </div>
     `;
-  }
-);
+  });
