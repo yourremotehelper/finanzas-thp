@@ -8,25 +8,39 @@
 </head>
 <body>
   <div id="app">
+
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-title">FINANZAS</div>
         <div class="brand-sub">seguimiento mensual</div>
       </div>
+
       <nav>
         <button id="nav-dashboard" class="nav-item">📊 Dashboard</button>
         <button id="nav-informes" class="nav-item">📈 Informes</button>
+        <button id="nav-cuentas" class="nav-item">🏦 Cuentas</button>
         <button id="nav-beneficiarios" class="nav-item">💳 Fichas de pago</button>
         <button id="nav-config" class="nav-item">⚙️ Configuración</button>
+
         <div class="nav-label">Meses</div>
         <div id="month-list"></div>
       </nav>
+
       <div class="sidebar-footer">
-        <button id="btn-pdf" class="btn-primary" style="background:#0f766e;">📄 Descargar PDF</button>
-        <div id="pdf-target-label" style="font-size:10px;color:#5eead4;text-align:center;margin:4px 0 8px;"></div>
-        <button id="btn-add-month" class="btn-primary">+ Nuevo mes</button>
+        <button id="btn-pdf" class="btn-primary" style="background:#0f766e;">
+          📄 Descargar PDF
+        </button>
+
+        <div id="pdf-target-label"
+             style="font-size:10px;color:#5eead4;text-align:center;margin:4px 0 8px;">
+        </div>
+
+        <button id="btn-add-month" class="btn-primary">
+          + Nuevo mes
+        </button>
       </div>
     </aside>
+
     <main id="main-content">
       <div class="loading">Cargando…</div>
     </main>
